@@ -62,6 +62,74 @@
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintTop_toBottomOf="@id/textview111" />
 
+            <!-- Faucet claim rules -->
+            <TextView
+                android:id="@+id/tv_faucet_rules"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:lineSpacingExtra="2dp"
+                android:textColor="#000000"
+                android:textSize="@dimen/text_size_small"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/textview2" />
+
+            <!-- Daily remaining claimable BKC title -->
+            <TextView
+                android:id="@+id/tv_faucet_daily_remaining"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="@string/activity_faucet_daily_remaining"
+                android:textColor="#000000"
+                android:textSize="@dimen/text_size_small"
+                android:textStyle="bold"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/tv_faucet_rules" />
+
+            <!-- Black & white progress bar for daily remaining claimable BKC -->
+            <FrameLayout
+                android:id="@+id/faucet_remaining_container"
+                android:layout_width="match_parent"
+                android:layout_height="26dp"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/faucet_progress_background"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/tv_faucet_daily_remaining">
+
+                <View
+                    android:id="@+id/faucet_remaining_fill"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:background="@color/black" />
+
+                <TextView
+                    android:id="@+id/tv_faucet_remaining_value"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:gravity="center"
+                    android:textColor="@color/white"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:shadowColor="#000000"
+                    android:shadowDx="0"
+                    android:shadowDy="0"
+                    android:shadowRadius="2" />
+            </FrameLayout>
+
+            <!-- Progress bar scale label -->
+            <TextView
+                android:id="@+id/tv_faucet_remaining_scale"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="#000000"
+                android:textSize="12sp"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toBottomOf="@id/faucet_remaining_container" />
+
             <!-- Checkbox Area -->
             <CheckBox
                 android:id="@+id/checkbox_claim"
@@ -71,7 +139,7 @@
                 android:button="@drawable/check_box"
                 android:checked="true"
                 app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/textview2" />
+                app:layout_constraintTop_toBottomOf="@id/tv_faucet_remaining_scale" />
 
             <!-- Checkbox Label -->
             <TextView

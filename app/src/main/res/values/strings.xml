@@ -350,6 +350,10 @@
     <string name="activity_faucet_claim_academic_bkc">Claim BKC academic tokens through faucets</string>
     <string name="activity_faucet_claim_daily_bkc">Claim some BKC for free every day</string>
     <string name="activity_faucet_academic_bkc_token">Claim academic BKC token</string>
+    <string name="activity_faucet_rules">Faucet claim rules:\n\u2022 Daily network-wide limit: %1$s BKC\n\u2022 Per IP per day: %2$s claims\n\u2022 Per address per day: %3$s claim\n\u2022 Per address in total: %4$s claims</string>
+    <string name="activity_faucet_daily_remaining">Daily remaining claimable BKC</string>
+    <string name="activity_faucet_remaining_value">%1$s BKC remaining</string>
+    <string name="activity_faucet_remaining_scale">0 BKC / %1$s BKC</string>
 
     <!-- Layout text: app/src/main/res/layout/activity_generate_account.xml / 布局前端文本 -->
     <string name="activity_generate_account_new_account">Generate new account</string>
