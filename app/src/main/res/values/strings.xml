@@ -186,6 +186,14 @@
     <string name="activity_about_github_url">https://github.com/HuangLab-SYSU/brokerwallet-academic</string>
     <string name="activity_about_copyright">© 2025 BrokerChain. All rights reserved.</string>
 
+    <!-- Update reminder dialog -->
+    <string name="update_reminder_title">Update available</string>
+    <string name="update_reminder_message">A newer version of BrokerChain Wallet is available.</string>
+    <string name="update_reminder_current_version">Current version: %1$s</string>
+    <string name="update_reminder_latest_version">Latest version: %1$s</string>
+    <string name="update_reminder_button_update">Update now</string>
+    <string name="update_reminder_button_ignore">Ignore</string>
+
     <!-- Layout text: app/src/main/res/layout/activity_account_detail.xml / 布局前端文本 -->
     <string name="activity_account_detail_account_1">Account 1</string>
     <string name="activity_account_detail_receive_qr_code">Receive QR Code</string>
