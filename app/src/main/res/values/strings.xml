@@ -903,6 +903,16 @@
     <string name="about_toast_install_permission">Please enable \'Install unknown apps\' permission</string>
     <string name="about_toast_install_permission_denied">Permission denied, cannot install</string>
     <string name="about_status_can_t_get_appversion">Can\'t get AppVersion</string>
+    <string name="about_status_checking">Checking for updates…</string>
+    <string name="about_status_latest">You already have the latest version.</string>
+    <string name="about_status_downloading">Downloading version %1$s…</string>
+    <string name="about_status_opening_installer">Download complete. Opening the installer…</string>
+    <string name="about_status_waiting_install_permission">Enable install permission, then return here to continue.</string>
+    <string name="about_status_download_failed">The update could not be downloaded.</string>
+    <string name="about_status_check_failed">The update check failed. Check the network and try again.</string>
+    <string name="about_status_install_permission_denied">Install permission was not granted.</string>
+    <string name="about_status_open_installer_failed">The installer could not be opened.</string>
+    <string name="about_button_retry_update">Retry</string>
 
     <!-- Runtime text: app/src/main/java/com/example/brokerfi/xc/AccountDetailActivity.java / Java运行时前端文本 -->
     <string name="account_detail_toast_address_copied">Address copied to clipboard</string>
