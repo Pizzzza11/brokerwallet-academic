@@ -21,6 +21,8 @@ import com.example.brokerfi.news.AboutActivity;
 
 /** Coordinates the version check and the update reminder dialog. */
 public final class UpdateReminderCoordinator {
+    public static final String EXTRA_CHECK_UPDATE_AFTER_LOGIN =
+            "com.example.brokerfi.extra.CHECK_UPDATE_AFTER_LOGIN";
     public static final String EXTRA_AUTO_START_UPDATE =
             "com.example.brokerfi.extra.AUTO_START_UPDATE";
 
