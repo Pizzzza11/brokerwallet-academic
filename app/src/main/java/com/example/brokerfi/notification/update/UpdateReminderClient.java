@@ -4,6 +4,7 @@ import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 
+import com.example.brokerfi.BuildConfig;
 import com.example.brokerfi.core.config.ApiConfig;
 import com.example.brokerfi.core.network.ApiCallback;
 import com.example.brokerfi.core.network.HTTPUtil;
@@ -22,6 +23,17 @@ public final class UpdateReminderClient {
             ApiCallback<UpdateReminder> callback
     ) {
         String currentVersion = getCurrentVersion(context);
+        if (BuildConfig.FORCE_UPDATE_REMINDER) {
+            String previewVersion = fallback(
+                    BuildConfig.UPDATE_REMINDER_PREVIEW_VERSION,
+                    "2.0.5"
+            );
+            UpdateReminder reminder = isNewerVersion(previewVersion, currentVersion)
+                    ? new UpdateReminder(currentVersion, previewVersion)
+                    : null;
+            callback.onSuccess(reminder);
+            return;
+        }
 
         new Thread(() -> {
             try {

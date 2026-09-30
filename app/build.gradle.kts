@@ -1,5 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
+}
+
+val updateReminderProperties = Properties().apply {
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use { load(it) }
+    }
+}
+
+fun String.toBuildConfigString(): String {
+    return "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }
 
 android {
@@ -16,8 +29,34 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
     }
+    buildFeatures {
+        buildConfig = true
+    }
     buildTypes {
+        getByName("debug") {
+            buildConfigField(
+                "boolean",
+                "FORCE_UPDATE_REMINDER",
+                updateReminderProperties
+                    .getProperty("forceUpdateReminder", "false")
+                    .toBoolean()
+                    .toString()
+            )
+            buildConfigField(
+                "String",
+                "UPDATE_REMINDER_PREVIEW_VERSION",
+                updateReminderProperties
+                    .getProperty("updateReminderPreviewVersion", "2.0.5")
+                    .toBuildConfigString()
+            )
+        }
         release {
+            buildConfigField("boolean", "FORCE_UPDATE_REMINDER", "false")
+            buildConfigField(
+                "String",
+                "UPDATE_REMINDER_PREVIEW_VERSION",
+                "2.0.5".toBuildConfigString()
+            )
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
