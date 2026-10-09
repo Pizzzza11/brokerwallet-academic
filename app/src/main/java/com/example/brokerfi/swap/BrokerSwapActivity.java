@@ -165,13 +165,15 @@ public class BrokerSwapActivity extends AppCompatActivity {
                 String key = TokenWalletHelper.getCurrentPrivateKey(getApplicationContext());
                 if (!sameAccount(address)) throw new IllegalStateException("账户已切换");
                 if (validate) client.validate(key);
-                SwapPoolSnapshot snapshot = SwapAsset.isAmm(pay, out) ? client.pool(key) : null;
                 BigInteger nativeAmount = client.balance(key, address, "");
                 BigInteger payAmount = pay == SwapAsset.BKC ? nativeAmount : client.balance(key, address, contract(pay));
                 BigInteger receiveAmount = out == SwapAsset.BKC ? nativeAmount : client.balance(key, address, contract(out));
                 BigInteger gas = client.gasReserve();
                 BigInteger approved = SwapAsset.isAmm(pay, out) && pay != SwapAsset.BKC
                         ? client.allowance(key, address, contract(pay)) : BigInteger.ZERO;
+                // Pool calls on Dash may wait for execution. Capture the quote LAST so balance/allowance
+                // reads cannot consume its 45-second validity before it reaches the screen.
+                SwapPoolSnapshot snapshot = SwapAsset.isAmm(pay, out) ? client.pool(key) : null;
                 main.post(() -> {
                     loading = false; refresh.setRefreshing(false);
                     if (isDestroyed()) return;
@@ -241,8 +243,11 @@ public class BrokerSwapActivity extends AppCompatActivity {
             details.setText(q==null ? "包装 / 解包：1 : 1，无资金池兑换费" : quoteDetails(q));
             String problem = validation(input,q);
             submit.setText(!problem.isEmpty() ? problem : needsApproval(input) ? "先授权本次金额（不会立即兑换）" : "确认兑换");
-            submit.setEnabled(problem.isEmpty() && !locked() && !loading);
-        } catch (Exception e) { submit.setText(amount.getText().length()==0 ? "请输入金额" : "金额精度不符、报价过期或金额太小"); }
+            // A background refresh must not disable a still-valid snapshot. validation() and the
+            // final preflight enforce freshness, current balances, current allowance and minimum out.
+            submit.setEnabled(problem.isEmpty() && !locked());
+        } catch (Exception e) { submit.setText(amount.getText().length()==0 ? "请输入金额"
+                : loading && pool==null ? "正在读取链上报价" : "金额精度不符、报价过期或金额太小"); }
     }
     private String quoteDetails(SwapQuoteMath.Quote q) {
         return "预计到账：" + SwapQuoteMath.format(q.output,q.to.decimals) + " " + q.to.symbol
