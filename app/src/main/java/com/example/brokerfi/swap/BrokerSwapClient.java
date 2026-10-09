@@ -24,7 +24,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /** Bounded synchronous calls on a background worker; same signed Dash wire protocol as the wallet.
- * No key/request logging, transparent retries or remote quote server. */
+ * No key/request logging, automatic write retries or remote quote server. Read-only calls retry once. */
 public final class BrokerSwapClient {
     public static final BigInteger GAS_LIMIT = SwapFeePolicy.GAS_LIMIT;
     private static final Gson GSON = new Gson();
@@ -50,18 +50,38 @@ public final class BrokerSwapClient {
         } catch (RuntimeException e) { throw new IOException("Invalid chain response"); }
     }
     public String rpc(String method, Object... params) throws IOException {
+        if (!isReadOnlyRpcMethod(method)) throw new IllegalArgumentException("Unsupported read RPC");
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("jsonrpc", "2.0"); body.put("id", 1); body.put("method", method); body.put("params", Arrays.asList(params));
-        return result(post(ChainConfig.CHAIN_JSON_RPC_URL, body));
+        IOException failure = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try { return result(post(ChainConfig.CHAIN_JSON_RPC_URL, body)); }
+            catch (IOException e) { failure = e; }
+        }
+        throw failure;
     }
     public String read(String key, String contract, String data) throws Exception {
+        IOException failure = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
         String uuid = UUID.randomUUID().toString();
         String[] signature = SecurityUtil.signECDSA(key, contract + data + "0x0" + uuid);
         CallReq request = new CallReq();
         request.setPublicKey(SecurityUtil.getPublicKeyFromPrivateKey(key)); request.setRandomStr(uuid);
         request.setTo(contract); request.setData(data); request.setValue("0x0");
         request.setSign1(signature[0]); request.setSign2(signature[1]);
-        return result(post(ChainConfig.getDashGatewayPostUrl("eth_call"), request));
+        try { return requireReadHex(result(post(ChainConfig.getDashGatewayPostUrl("eth_call"), request))); }
+        catch (IOException e) { failure = e; }
+        }
+        throw failure;
+    }
+    static boolean isReadOnlyRpcMethod(String method) {
+        return "eth_chainId".equals(method) || "eth_getCode".equals(method)
+                || "eth_getBalance".equals(method) || "eth_gasPrice".equals(method);
+    }
+    static String requireReadHex(String value) throws IOException {
+        if (value == null || !value.matches("0x([0-9a-fA-F]{64})+"))
+            throw new IOException("Empty or incomplete chain read");
+        return value;
     }
     public void validate(String key) throws Exception {
         if (ChainConfig.useLocalBrokerChainNode()) throw new IOException("Swap deployment requires Dash chain");

@@ -306,22 +306,29 @@ public class BrokerSwapActivity extends AppCompatActivity {
     private void prepare(int id, String address, SwapAsset pay, SwapAsset out, BigInteger input, SwapQuoteMath.Quote confirmed, boolean approval) {
         preparing = true; render();
         READS.execute(() -> {
+            String stage = "账户状态";
             try {
                 if (id!=generation || !sameAccount(address)) throw new IllegalStateException("账户或资产已改变，请重新确认");
                 String key = TokenWalletHelper.getCurrentPrivateKey(getApplicationContext());
+                stage = "BKC 余额";
                 BigInteger nativeAmount = client.balance(key,address,"");
+                stage = "支付资产余额";
                 BigInteger balance = pay==SwapAsset.BKC ? nativeAmount : client.balance(key,address,contract(pay));
+                stage = "手续费";
                 BigInteger reserve = client.gasReserve().multiply(BigInteger.valueOf(confirmed!=null && pay!=SwapAsset.BKC ? 2 : 1));
                 if (balance.compareTo(input)<0 || nativeAmount.compareTo(reserve.add(pay==SwapAsset.BKC ? input : BigInteger.ZERO))<0)
                     throw new IllegalStateException("余额或手续费不足");
                 if (confirmed!=null) {
+                    stage = "最新资金池报价";
                     SwapQuoteMath.Quote current = SwapQuoteMath.quote(client.pool(key),pay,out,input,confirmed.slippageBps,SystemClock.elapsedRealtime());
                     if (current.output.compareTo(confirmed.minimum)<0 || current.blocked()
                             || current.impactBps>=500 && confirmed.impactBps<500)
                         throw new IllegalStateException("价格已变动，请刷新后重新确认");
+                    stage = "授权额度";
                     if (!approval && pay!=SwapAsset.BKC && client.allowance(key,address,contract(pay)).compareTo(input)<0)
                         throw new IllegalStateException("授权不足，请重新授权本次金额");
                 }
+                stage = "交易编码";
                 String target, data; BigInteger value = BigInteger.ZERO;
                 if (approval) { target=contract(pay); data=BrokerSwapAbi.call("approve",new Address(config.router()),new Uint256(input)); }
                 else if (confirmed!=null) { target=config.router(); data=BrokerSwapAbi.swap(config,confirmed,BrokerSwapConfig.walletAddress(address),System.currentTimeMillis()/1000+300); if(pay==SwapAsset.BKC)value=input; }
@@ -336,7 +343,14 @@ public class BrokerSwapActivity extends AppCompatActivity {
                     render();
                 });
             } catch (Exception e) {
-                main.post(() -> { preparing=false; if(!isDestroyed()) { toast(e.getMessage()==null ? "发送前检查失败，未发送" : e.getMessage()); fetch(); render(); } });
+                final String failedStage = stage;
+                main.post(() -> {
+                    preparing=false;
+                    if(!isDestroyed()) {
+                        clearRead(); error="发送前的"+failedStage+"检查未通过，未发交易。请下拉刷新后重新确认。";
+                        toast(error); render();
+                    }
+                });
             }
         });
     }
@@ -366,7 +380,7 @@ public class BrokerSwapActivity extends AppCompatActivity {
         for(TokenTxRecord r:TokenTxHistoryStore.getAll(this,wallet)) if(r.status!=null)list.add(r);
         if(list.isEmpty()) { toast("暂无兑换记录"); return; }
         String[] labels=new String[list.size()];
-        for(int i=0;i<labels.length;i++) { TokenTxRecord r=list.get(i); labels[i]=SwapRecordPresentation.status(r.status)+" · "+r.amountDisplay+" "+r.fromSymbol; }
+        for(int i=0;i<labels.length;i++) { TokenTxRecord r=list.get(i); labels[i]=("APPROVAL".equals(r.type)?"授权 · ":"兑换 · ")+SwapRecordPresentation.status(r.status)+" · "+r.amountDisplay+" "+r.fromSymbol; }
         new AlertDialog.Builder(this).setTitle("兑换 / 授权记录").setItems(labels,(d,which)-> {
             TokenTxRecord r=list.get(which);
             if(TokenTxHistoryStore.isUnresolvedSwap(r) && SwapReceipt.validHash(r.txHash)) {
