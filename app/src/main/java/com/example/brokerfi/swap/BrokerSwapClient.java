@@ -1,0 +1,127 @@
+package com.example.brokerfi.swap;
+
+import android.os.SystemClock;
+import com.example.brokerfi.core.blockchain.model.CallReq;
+import com.example.brokerfi.core.blockchain.model.SendETHTXReq;
+import com.example.brokerfi.core.config.ChainConfig;
+import com.example.brokerfi.core.security.SecurityUtil;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
+import org.web3j.abi.datatypes.Address;
+import org.web3j.crypto.Hash;
+import java.io.IOException;
+import java.math.BigInteger;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
+/** Bounded synchronous calls on a background worker; same signed Dash wire protocol as the wallet.
+ * No key/request logging, transparent retries or remote quote server. */
+public final class BrokerSwapClient {
+    public static final BigInteger GAS_LIMIT = BigInteger.valueOf(1_500_000);
+    private static final Gson GSON = new Gson();
+    private final OkHttpClient http = new OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS).callTimeout(30, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false).build();
+    private final BrokerSwapConfig cfg;
+    public BrokerSwapClient(BrokerSwapConfig config) { cfg = config; }
+    private String post(String url, Object body) throws IOException {
+        Request request = new Request.Builder().url(url).post(RequestBody.create(
+                MediaType.parse("application/json; charset=utf-8"), GSON.toJson(body))).build();
+        try (Response response = http.newCall(request).execute()) {
+            if (!response.isSuccessful() || response.body() == null) throw new IOException("Chain connection failed");
+            return response.body().string();
+        }
+    }
+    private String result(String raw) throws IOException {
+        try {
+            JsonObject object = JsonParser.parseString(raw).getAsJsonObject();
+            if (object.has("error") || !object.has("result") || object.get("result").isJsonNull())
+                throw new IOException("Chain query rejected");
+            return object.get("result").getAsString();
+        } catch (RuntimeException e) { throw new IOException("Invalid chain response"); }
+    }
+    public String rpc(String method, Object... params) throws IOException {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("jsonrpc", "2.0"); body.put("id", 1); body.put("method", method); body.put("params", Arrays.asList(params));
+        return result(post(ChainConfig.CHAIN_JSON_RPC_URL, body));
+    }
+    public String read(String key, String contract, String data) throws Exception {
+        String uuid = UUID.randomUUID().toString();
+        String[] signature = SecurityUtil.signECDSA(key, contract + data + "0x0" + uuid);
+        CallReq request = new CallReq();
+        request.setPublicKey(SecurityUtil.getPublicKeyFromPrivateKey(key)); request.setRandomStr(uuid);
+        request.setTo(contract); request.setData(data); request.setValue("0x0");
+        request.setSign1(signature[0]); request.setSign2(signature[1]);
+        return result(post(ChainConfig.getDashGatewayPostUrl("eth_call"), request));
+    }
+    public void validate(String key) throws Exception {
+        if (ChainConfig.useLocalBrokerChainNode()) throw new IOException("Swap deployment requires Dash chain");
+        if (!SwapReceipt.quantity(rpc("eth_chainId")).equals(BigInteger.valueOf(cfg.chainId())))
+            throw new IOException("Swap chain ID does not match");
+        String code = rpc("eth_getCode", cfg.router(), "latest");
+        if (!code.matches("0x([0-9a-fA-F]{2})+") || !Hash.sha3(code).equalsIgnoreCase(cfg.routerCodeHash()))
+            throw new IOException("Swap Router code does not match");
+        checkAddress(key, cfg.router(), "factory", cfg.factory());
+        checkAddress(key, cfg.router(), "WBKC", cfg.wbkc());
+        checkAddress(key, cfg.router(), "musdt", cfg.musdt());
+        checkAddress(key, cfg.router(), "pair", cfg.pair());
+        boolean musdt0 = cfg.musdt().compareTo(cfg.wbkc()) < 0;
+        checkAddress(key, cfg.pair(), "token0", musdt0 ? cfg.musdt() : cfg.wbkc());
+        checkAddress(key, cfg.pair(), "token1", musdt0 ? cfg.wbkc() : cfg.musdt());
+        if (!BrokerSwapAbi.words(read(key, cfg.musdt(), BrokerSwapAbi.call("decimals")), 1)[0].equals(BigInteger.valueOf(6))
+                || !BrokerSwapAbi.words(read(key, cfg.wbkc(), BrokerSwapAbi.call("decimals")), 1)[0].equals(BigInteger.valueOf(18)))
+            throw new IOException("Swap token decimals do not match");
+    }
+    private void checkAddress(String key, String contract, String getter, String expected) throws Exception {
+        if (!expected.equalsIgnoreCase(BrokerSwapAbi.address(read(key, contract, BrokerSwapAbi.call(getter)))))
+            throw new IOException("Swap " + getter + " does not match");
+    }
+    public SwapPoolSnapshot pool(String key) throws Exception {
+        BigInteger[] r = BrokerSwapAbi.words(read(key, cfg.pair(), BrokerSwapAbi.call("getReserves")), 3);
+        if (r[0].bitLength() > 112 || r[1].bitLength() > 112 || r[2].bitLength() > 32)
+            throw new IOException("Invalid pool reserves");
+        boolean musdt0 = cfg.musdt().compareTo(cfg.wbkc()) < 0;
+        return new SwapPoolSnapshot(r[musdt0 ? 0 : 1], r[musdt0 ? 1 : 0], SystemClock.elapsedRealtime());
+    }
+    public BigInteger balance(String key, String wallet, String contract) throws Exception {
+        return contract.isEmpty() ? SwapReceipt.quantity(rpc("eth_getBalance", wallet, "latest"))
+                : BrokerSwapAbi.words(read(key, contract, BrokerSwapAbi.call("balanceOf", new Address(wallet))), 1)[0];
+    }
+    public BigInteger allowance(String key, String wallet, String token) throws Exception {
+        return BrokerSwapAbi.words(read(key, token, BrokerSwapAbi.call("allowance", new Address(wallet), new Address(cfg.router()))), 1)[0];
+    }
+    /** Conservative reserve, not a fee guarantee: Dash chooses the execution gas price. */
+    public BigInteger gasReserve() throws Exception {
+        BigInteger price = SwapReceipt.quantity(rpc("eth_gasPrice")).max(BigInteger.valueOf(1_000_000_000));
+        return price.multiply(GAS_LIMIT).multiply(BigInteger.valueOf(2));
+    }
+    public String send(String key, String target, String data, BigInteger value) throws Exception {
+        String uuid = UUID.randomUUID().toString(), valueHex = "0x" + value.toString(16), gasHex = "0x" + GAS_LIMIT.toString(16);
+        String[] signature = SecurityUtil.signECDSA(key, target + data + valueHex + gasHex + uuid);
+        SendETHTXReq request = new SendETHTXReq();
+        request.setPublicKey(SecurityUtil.getPublicKeyFromPrivateKey(key)); request.setRandomStr(uuid);
+        request.setTo(target); request.setData(data); request.setValue(valueHex); request.setGas(gasHex);
+        request.setSign1(signature[0]); request.setSign2(signature[1]);
+        String hash = result(post(ChainConfig.getDashGatewayPostUrl("eth_sendTransaction"), request));
+        if (!SwapReceipt.validHash(hash)) throw new IOException("No valid transaction hash; do not resend automatically");
+        return hash;
+    }
+    public SwapReceipt receipt(String key, String hash, SwapAsset from, SwapAsset to, BigInteger input, String wallet) throws Exception {
+        String uuid = UUID.randomUUID().toString(), bodyHash = hash.substring(2);
+        String[] sig = SecurityUtil.signECDSA(key, uuid + bodyHash);
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("uuid", bodyHash); request.put("PublicKey", SecurityUtil.getPublicKeyFromPrivateKey(key));
+        request.put("RandomStr", uuid); request.put("Sign1", sig[0]); request.put("Sign2", sig[1]);
+        return SwapReceipt.parse(post(ChainConfig.getDashGatewayPostUrl("eth_getTransactionReceipt"), request),
+                hash, cfg, from, to, input, wallet);
+    }
+}
