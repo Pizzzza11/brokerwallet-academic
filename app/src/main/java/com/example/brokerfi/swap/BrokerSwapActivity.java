@@ -54,7 +54,7 @@ public class BrokerSwapActivity extends AppCompatActivity {
         @Override public void run() {
             if (!resumed) return;
             render();
-            if (!loading && !confirming && !preparing && !SwapOperationRunner.active(wallet)) fetch();
+            if (!loading && !confirming && !preparing && error.isEmpty() && !SwapOperationRunner.active(wallet)) fetch();
             main.postDelayed(this, 15000);
         }
     };
@@ -161,18 +161,37 @@ public class BrokerSwapActivity extends AppCompatActivity {
         final boolean needsProtocol = pay == SwapAsset.SWAP_WBKC || out == SwapAsset.SWAP_WBKC || pay == SwapAsset.MUSDT || out == SwapAsset.MUSDT;
         final boolean validate = needsProtocol && (validatedAt == 0 || SystemClock.elapsedRealtime()-validatedAt > 600000);
         READS.execute(() -> {
+            String stage = "账户";
             try {
                 String key = TokenWalletHelper.getCurrentPrivateKey(getApplicationContext());
                 if (!sameAccount(address)) throw new IllegalStateException("账户已切换");
-                if (validate) client.validate(key);
+                if (validate) {
+                    stage = "合约校验";
+                    client.validate(key);
+                    final long checkedAt = SystemClock.elapsedRealtime();
+                    main.post(() -> {
+                        // Metadata/code validation succeeded independently of later volatile reads.
+                        // A failed reserve/balance read must not restart all eight immutable checks.
+                        if (!isDestroyed() && id == generation && sameAccount(address)) {
+                            validatedAt = checkedAt;
+                            importProtocolTokens();
+                        }
+                    });
+                }
+                stage = "BKC 余额";
                 BigInteger nativeAmount = client.balance(key, address, "");
+                stage = "支付资产余额";
                 BigInteger payAmount = pay == SwapAsset.BKC ? nativeAmount : client.balance(key, address, contract(pay));
+                stage = "到账资产余额";
                 BigInteger receiveAmount = out == SwapAsset.BKC ? nativeAmount : client.balance(key, address, contract(out));
+                stage = "手续费";
                 BigInteger gas = client.gasReserve();
+                stage = "授权额度";
                 BigInteger approved = SwapAsset.isAmm(pay, out) && pay != SwapAsset.BKC
                         ? client.allowance(key, address, contract(pay)) : BigInteger.ZERO;
                 // Pool calls on Dash may wait for execution. Capture the quote LAST so balance/allowance
                 // reads cannot consume its 45-second validity before it reaches the screen.
+                stage = "资金池";
                 SwapPoolSnapshot snapshot = SwapAsset.isAmm(pay, out) ? client.pool(key) : null;
                 main.post(() -> {
                     loading = false; refresh.setRefreshing(false);
@@ -180,15 +199,15 @@ public class BrokerSwapActivity extends AppCompatActivity {
                     if (id != generation || !sameAccount(address)) { fetch(); return; }
                     pool = snapshot; nativeBalance = nativeAmount; payBalance = payAmount; receiveBalance = receiveAmount;
                     gasReserve = gas; allowance = approved; readAt = SystemClock.elapsedRealtime(); error = "";
-                    if (validate) { validatedAt = readAt; importProtocolTokens(); }
                     render();
                 });
             } catch (Exception e) {
+                final String failedStage = stage;
                 main.post(() -> {
                     loading = false; refresh.setRefreshing(false);
                     if (isDestroyed()) return;
                     if (id != generation) { fetch(); return; }
-                    clearRead(); error = "读取失败或部署校验不符。下拉刷新后再试；不会使用旧报价发交易。"; render();
+                    clearRead(); error = failedStage + "读取失败，已停止自动重试。下拉刷新后再试；不会使用旧报价发交易。"; render();
                 });
             }
         });
