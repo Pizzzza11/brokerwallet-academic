@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 /** Bounded synchronous calls on a background worker; same signed Dash wire protocol as the wallet.
  * No key/request logging, transparent retries or remote quote server. */
 public final class BrokerSwapClient {
-    public static final BigInteger GAS_LIMIT = BigInteger.valueOf(1_500_000);
+    public static final BigInteger GAS_LIMIT = SwapFeePolicy.GAS_LIMIT;
     private static final Gson GSON = new Gson();
     private final OkHttpClient http = new OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS).callTimeout(30, TimeUnit.SECONDS)
@@ -103,8 +103,7 @@ public final class BrokerSwapClient {
     }
     /** Conservative reserve, not a fee guarantee: Dash chooses the execution gas price. */
     public BigInteger gasReserve() throws Exception {
-        BigInteger price = SwapReceipt.quantity(rpc("eth_gasPrice")).max(BigInteger.valueOf(1_000_000_000));
-        return price.multiply(GAS_LIMIT).multiply(BigInteger.valueOf(2));
+        return SwapFeePolicy.reserve(SwapReceipt.quantity(rpc("eth_gasPrice")));
     }
     public String send(String key, String target, String data, BigInteger value) throws Exception {
         String uuid = UUID.randomUUID().toString(), valueHex = "0x" + value.toString(16), gasHex = "0x" + GAS_LIMIT.toString(16);

@@ -246,7 +246,8 @@ public class BrokerSwapActivity extends AppCompatActivity {
             // A background refresh must not disable a still-valid snapshot. validation() and the
             // final preflight enforce freshness, current balances, current allowance and minimum out.
             submit.setEnabled(problem.isEmpty() && !locked());
-        } catch (Exception e) { submit.setText(amount.getText().length()==0 ? "请输入金额"
+        } catch (Exception e) { submit.setText(preparing ? "发送前重新检查…" : SwapOperationRunner.active(wallet) ? "交易处理中，请勿重复操作"
+                : amount.getText().length()==0 ? "请输入金额"
                 : loading && pool==null ? "正在读取链上报价" : "金额精度不符、报价过期或金额太小"); }
     }
     private String quoteDetails(SwapQuoteMath.Quote q) {
