@@ -36,6 +36,15 @@ public final class TokenTxDetailDialog {
         if (activity == null || activity.isFinishing() || record == null) {
             return;
         }
+        if (record.status != null) {
+            new AlertDialog.Builder(activity).setTitle("交易详情")
+                    .setMessage(com.example.brokerfi.swap.SwapRecordPresentation.details(record))
+                    .setPositiveButton("关闭", null)
+                    .setNeutralButton("复制交易编号", (d, w) -> {
+                        if (!TextUtils.isEmpty(record.txHash)) copyHash(activity, record.txHash);
+                    }).show();
+            return;
+        }
 
         AlertDialog dialog = new AlertDialog.Builder(activity)
                 .setView(R.layout.dialog_token_tx_detail)

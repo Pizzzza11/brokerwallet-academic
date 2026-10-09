@@ -29,6 +29,21 @@ public class TokenTxRecord implements Serializable {
     public String fromSymbol;
     /** Receiving-side symbol for swap-style records. */
     public String toSymbol;
+    /** Optional MiniV2 fields. Null status identifies a legacy record. Never store signing material. */
+    public String operationId;
+    public String status;
+    public String fromAsset;
+    public String toAsset;
+    public String inputUnits;
+    public String estimatedOutput;
+    public String actualOutput;
+    public String minimumOutput;
+    public String toContractAddress;
+    public String routerAddress;
+    public long chainId;
+    public int slippageBps;
+    public int impactBps;
+    public String gasCost;
 
     public TokenTxRecord() {
     }
