@@ -43,6 +43,19 @@ public final class BrokerSwapConfig {
         return value.toLowerCase(Locale.US);
     }
 
+    /** The legacy wallet/history uses unprefixed IDs; RPC, ABI and event topics use 0x addresses. */
+    public static String walletId(String value) {
+        if (value == null) return "";
+        String id = value.trim().toLowerCase(Locale.US);
+        if (id.startsWith("0x")) id = id.substring(2);
+        return id.matches("[0-9a-f]{40}") ? id : "";
+    }
+    public static String walletAddress(String value) {
+        String id = walletId(value);
+        if (id.isEmpty()) throw new IllegalArgumentException("Invalid wallet address");
+        return "0x" + id;
+    }
+
     public long chainId() { return chainId; }
     public String factory() { return factory; }
     public String router() { return router; }

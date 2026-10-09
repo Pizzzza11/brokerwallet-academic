@@ -25,10 +25,8 @@ public class SwapActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_swap);
-
-        intView();
-        intEvent();
+        startActivity(new Intent(this, BrokerSwapActivity.class));
+        finish();
     }
 
     private void intView() {

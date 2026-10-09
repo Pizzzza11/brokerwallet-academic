@@ -302,6 +302,39 @@
 
                 </androidx.constraintlayout.widget.ConstraintLayout>
 
+                <LinearLayout
+                    android:id="@+id/broker_swap_panel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+                    <TextView
+                        android:id="@+id/broker_swap_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="#475569"
+                        android:textSize="13sp" />
+                    <TextView
+                        android:id="@+id/broker_swap_details"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:textColor="#0F172A"
+                        android:textSize="13sp" />
+                    <Button
+                        android:id="@+id/broker_swap_slippage"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textAllCaps="false" />
+                    <Button
+                        android:id="@+id/broker_swap_history"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/broker_swap_history"
+                        android:textAllCaps="false" />
+                </LinearLayout>
+
                 <android.widget.Button
                     android:id="@+id/token_confirm_button"
                     android:layout_width="match_parent"

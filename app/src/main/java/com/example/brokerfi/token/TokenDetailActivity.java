@@ -440,7 +440,7 @@ public class TokenDetailActivity extends AppCompatActivity {
             Toast.makeText(this, R.string.token_contract_missing, Toast.LENGTH_LONG).show();
             return;
         }
-        Intent intent = new Intent(this, TokenSwapActivity.class);
+        Intent intent = new Intent(this, com.example.brokerfi.swap.BrokerSwapActivity.class);
         intent.putExtra(TokenSwapActivity.EXTRA_UNWRAP, unwrap);
         if (selectedToken != null && !TextUtils.isEmpty(selectedToken.getContractAddress())) {
             intent.putExtra(TokenSwapActivity.EXTRA_PAY_CONTRACT, selectedToken.getContractAddress());

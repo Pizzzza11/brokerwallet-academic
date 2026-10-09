@@ -29,13 +29,15 @@ public final class SwapOperationRunner {
         WORK.execute(() -> {
             boolean attempted = false;
             try {
-                if (!wallet.equalsIgnoreCase(TokenWalletHelper.getWalletAddress(app))) throw new IllegalStateException("Account changed");
+                if (!wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(app)))) throw new IllegalStateException("Account changed");
                 for (TokenTxRecord old : TokenTxHistoryStore.getAll(app, wallet))
                     if (TokenTxHistoryStore.isUnresolvedSwap(old)) throw new IllegalStateException("Unresolved operation");
                 record.status = "SUBMITTING";
                 if (!TokenTxHistoryStore.upsertSwap(app, wallet, record)) throw new IllegalStateException("Cannot save journal");
                 String key = TokenWalletHelper.getCurrentPrivateKey(app);
-                if (!wallet.equalsIgnoreCase(TokenWalletHelper.getWalletAddress(app))) throw new IllegalStateException("Account changed");
+                if (!wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(app)))
+                        || !wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(com.example.brokerfi.core.security.SecurityUtil.GetAddress(key))))
+                    throw new IllegalStateException("Account changed");
                 attempted = true;
                 BrokerSwapClient client = new BrokerSwapClient(cfg);
                 record.txHash = client.send(key, target, data, value);
@@ -59,7 +61,7 @@ public final class SwapOperationRunner {
         Context app = context.getApplicationContext();
         WORK.execute(() -> {
             try {
-                if (wallet.equalsIgnoreCase(TokenWalletHelper.getWalletAddress(app)))
+                if (wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(app))))
                     poll(app, new BrokerSwapClient(cfg), TokenWalletHelper.getCurrentPrivateKey(app), wallet, record);
             } catch (Exception ignored) { } finally {
                 ACTIVE.remove(lock); MAIN.post(() -> listener.finished(record));

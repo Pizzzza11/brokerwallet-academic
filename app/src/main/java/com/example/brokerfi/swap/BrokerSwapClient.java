@@ -93,10 +93,12 @@ public final class BrokerSwapClient {
         return new SwapPoolSnapshot(r[musdt0 ? 0 : 1], r[musdt0 ? 1 : 0], SystemClock.elapsedRealtime());
     }
     public BigInteger balance(String key, String wallet, String contract) throws Exception {
+        wallet = BrokerSwapConfig.walletAddress(wallet);
         return contract.isEmpty() ? SwapReceipt.quantity(rpc("eth_getBalance", wallet, "latest"))
                 : BrokerSwapAbi.words(read(key, contract, BrokerSwapAbi.call("balanceOf", new Address(wallet))), 1)[0];
     }
     public BigInteger allowance(String key, String wallet, String token) throws Exception {
+        wallet = BrokerSwapConfig.walletAddress(wallet);
         return BrokerSwapAbi.words(read(key, token, BrokerSwapAbi.call("allowance", new Address(wallet), new Address(cfg.router()))), 1)[0];
     }
     /** Conservative reserve, not a fee guarantee: Dash chooses the execution gas price. */
@@ -111,9 +113,7 @@ public final class BrokerSwapClient {
         request.setPublicKey(SecurityUtil.getPublicKeyFromPrivateKey(key)); request.setRandomStr(uuid);
         request.setTo(target); request.setData(data); request.setValue(valueHex); request.setGas(gasHex);
         request.setSign1(signature[0]); request.setSign2(signature[1]);
-        String hash = result(post(ChainConfig.getDashGatewayPostUrl("eth_sendTransaction"), request));
-        if (!SwapReceipt.validHash(hash)) throw new IOException("No valid transaction hash; do not resend automatically");
-        return hash;
+        return SwapReceipt.sentHash(post(ChainConfig.getDashGatewayPostUrl("eth_sendTransaction"), request));
     }
     public SwapReceipt receipt(String key, String hash, SwapAsset from, SwapAsset to, BigInteger input, String wallet) throws Exception {
         String uuid = UUID.randomUUID().toString(), bodyHash = hash.substring(2);

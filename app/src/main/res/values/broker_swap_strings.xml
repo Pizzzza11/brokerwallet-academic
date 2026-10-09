@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="broker_swap_title">BrokerSwap</string>
+    <string name="broker_swap_history">兑换记录 / 查询未确认交易</string>
+    <string name="broker_swap_test_notice">mUSDT 是测试资产，不是真实 USDT。原钱包 wBKC 与 wBKC (Swap) 是不同合约，不可混用。</string>
+</resources>

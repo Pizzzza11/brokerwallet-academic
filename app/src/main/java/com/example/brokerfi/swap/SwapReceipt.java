@@ -38,7 +38,7 @@ public final class SwapReceipt {
                     JsonObject log = element.getAsJsonObject();
                     if (!cfg.pair().equalsIgnoreCase(log.get("address").getAsString())) continue;
                     JsonArray topics = log.getAsJsonArray("topics");
-                    String destination = to == SwapAsset.BKC ? cfg.router() : wallet;
+                    String destination = to == SwapAsset.BKC ? cfg.router() : BrokerSwapConfig.walletAddress(wallet);
                     if (topics.size() != 3 || !SWAP_TOPIC.equalsIgnoreCase(topics.get(0).getAsString())
                             || !cfg.router().equalsIgnoreCase(BrokerSwapAbi.address(topics.get(1).getAsString()))
                             || !destination.equalsIgnoreCase(BrokerSwapAbi.address(topics.get(2).getAsString()))) continue;
@@ -62,5 +62,19 @@ public final class SwapReceipt {
         return new BigInteger(hex.substring(2), 16);
     }
     public static boolean validHash(String hash) { return hash != null && hash.matches("0x[0-9a-fA-F]{64}"); }
+    /** Dash deployments may return plain hash text or a JSON-RPC result; neither allows arbitrary IDs. */
+    public static String sentHash(String raw) {
+        String value = raw == null ? "" : raw.trim();
+        if (value.startsWith("{")) {
+            try {
+                JsonObject envelope = JsonParser.parseString(value).getAsJsonObject();
+                if (envelope.has("error")) throw new IllegalArgumentException("Send rejected");
+                value = envelope.get("result").getAsString();
+            } catch (RuntimeException e) { throw new IllegalArgumentException("No valid transaction hash"); }
+        }
+        if (value.matches("[0-9a-fA-F]{64}")) value = "0x" + value;
+        if (!validHash(value)) throw new IllegalArgumentException("No valid transaction hash");
+        return value.toLowerCase(java.util.Locale.ROOT);
+    }
     public static SwapReceipt pending() { return new SwapReceipt("PENDING", null, null); }
 }
