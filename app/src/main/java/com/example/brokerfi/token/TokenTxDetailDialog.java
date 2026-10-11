@@ -36,6 +36,12 @@ public final class TokenTxDetailDialog {
         if (activity == null || activity.isFinishing() || record == null) {
             return;
         }
+        if (TokenItem.NATIVE_BKC.equals(record.contractAddress) && record.status==null) {
+            new AlertDialog.Builder(activity).setTitle("BKC 交易详情")
+                    .setMessage((TokenTxRecord.TYPE_SEND.equals(record.type)?"发送：":"接收：")+record.amountDisplay+" BKC\n对方："+record.detail
+                            +"\n交易标识："+record.txHash+"\n手续费："+(record.gasCost==null?"待核实":record.gasCost+" BKC"))
+                    .setPositiveButton("关闭",null).setNeutralButton("复制交易标识",(d,w)->copyHash(activity,record.txHash)).show();return;
+        }
         if (record.status != null) {
             new AlertDialog.Builder(activity).setTitle("交易详情")
                     .setMessage(com.example.brokerfi.swap.SwapRecordPresentation.details(record))

@@ -159,7 +159,7 @@ public final class TokenTxHistoryStore {
     private static boolean shouldRemoveWalletPeerGetTx2Record(
             TokenTxRecord record,
             java.util.Set<String> walletPeerGetTx2Ids) {
-        if (record == null || TokenTxRecord.isSwapType(record.type)) {
+        if (record == null || TokenTxRecord.isSwapType(record.type) || TokenItem.NATIVE_BKC.equals(record.contractAddress)) {
             return false;
         }
         if (!TokenTxRecord.TYPE_SEND.equals(record.type)
@@ -179,7 +179,7 @@ public final class TokenTxHistoryStore {
     }
 
     private static boolean shouldRemoveMisclassifiedPeerRecord(TokenTxRecord record) {
-        if (record == null || TokenTxRecord.isSwapType(record.type)) {
+        if (record == null || TokenTxRecord.isSwapType(record.type) || TokenItem.NATIVE_BKC.equals(record.contractAddress)) {
             return false;
         }
         if (!TokenTxRecord.TYPE_SEND.equals(record.type)
@@ -241,7 +241,9 @@ public final class TokenTxHistoryStore {
                     continue;
                 }
             }
-            if (target.equals(recordContract) || target.equals(ChainAddressUtil.normalizeAddress(record.toContractAddress))) {
+            boolean nativeLeg=TokenItem.NATIVE_BKC.equals(target) && record.status!=null
+                    && ("BKC".equals(record.fromAsset) || "BKC".equals(record.toAsset) || record.isLiquidity());
+            if (target.equals(recordContract) || target.equals(ChainAddressUtil.normalizeAddress(record.toContractAddress)) || nativeLeg) {
                 result.add(record);
             }
         }
@@ -317,6 +319,9 @@ public final class TokenTxHistoryStore {
         if (a == null || b == null) {
             return false;
         }
+        if (TokenItem.NATIVE_BKC.equals(a.contractAddress) || TokenItem.NATIVE_BKC.equals(b.contractAddress))
+            return TokenItem.NATIVE_BKC.equals(a.contractAddress) && TokenItem.NATIVE_BKC.equals(b.contractAddress)
+                    && !TextUtils.isEmpty(a.txHash) && a.txHash.equals(b.txHash);
         // Two real exchanges with equal input within two minutes are still two transactions.
         if (a.status != null || b.status != null) {
             return !TextUtils.isEmpty(a.txHash) && a.txHash.equalsIgnoreCase(b.txHash);

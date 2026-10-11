@@ -26,7 +26,7 @@ public final class TokenTxDisplayHelper {
         if (context == null || record == null || record.type == null) {
             return "";
         }
-        if (record.status != null) return ("APPROVAL".equals(record.type) ? "授权" : "兑换") + " · "
+        if (record.status != null) return com.example.brokerfi.swap.SwapRecordPresentation.label(record) + " · "
                 + com.example.brokerfi.swap.SwapRecordPresentation.status(record.status);
         if (TokenTxRecord.isSwapType(record.type)) {
             if (isWrapRecord(record)) {
@@ -97,6 +97,7 @@ public final class TokenTxDisplayHelper {
         if (context == null || record == null) {
             return "";
         }
+        if(record.isLiquidity())return record.amountDisplay;
         if (!showDetailedSwapAmounts && record.isSwap()) {
             return legLabel(record.amountDisplay, record.resolveFromSymbol());
         }

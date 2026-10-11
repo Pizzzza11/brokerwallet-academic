@@ -64,6 +64,11 @@ public class TokenInfoActivity extends AppCompatActivity {
             sourceView.setText(loadContractSource());
         } else {
             String intro = getString(R.string.token_info_custom_intro, tokenName != null ? tokenName : "");
+            try {
+                com.example.brokerfi.swap.BrokerSwapConfig cfg=com.example.brokerfi.swap.BrokerSwapConfig.load(this);
+                if(cfg.musdt().equalsIgnoreCase(address))intro="mUSDT 是 6 位精度的测试代币，用于 BrokerSwap 兑换和流动性演示，不是真实 USDT。\n收款请使用你的钱包地址，不要向下面的合约地址转账。";
+                else if(cfg.wbkc().equalsIgnoreCase(address))intro="wBKC (Swap) 是兑换协议的包装 BKC，与原钱包的 wBKC 为不同合约，不可混用。\n收款请使用你的钱包地址。";
+            } catch(Exception ignored) { }
             introView.setText(intro);
             if (sourceLabel != null) {
                 sourceLabel.setVisibility(View.GONE);
