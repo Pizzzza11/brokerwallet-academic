@@ -44,6 +44,13 @@ public class TokenTxRecord implements Serializable {
     public int slippageBps;
     public int impactBps;
     public String gasCost;
+    /** Optional liquidity fields. Existing histories remain compatible; no signing data. */
+    public String liquidityAction;
+    public String lpUnits, estimatedLp, actualLp;
+    public String bkcUnits, musdtUnits, actualBkc, actualMusdt;
+    public String minimumLpUnits, minimumBkcUnits, minimumMusdtUnits;
+
+    public boolean isLiquidity() { return liquidityAction != null; }
 
     public TokenTxRecord() {
     }

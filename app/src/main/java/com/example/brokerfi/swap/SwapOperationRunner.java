@@ -71,6 +71,18 @@ public final class SwapOperationRunner {
     }
     private static void poll(Context app, BrokerSwapClient client, String key, String wallet, TokenTxRecord record) throws Exception {
         for (int i = 0; i < 3; i++) {
+            if (record.isLiquidity()) {
+                LiquidityReceipt receipt=LiquidityReceipt.parse(client.receiptRaw(key,record.txHash),client.deployment(),record,wallet);
+                record.status=receipt.status;
+                if (receipt.musdt!=null) record.actualMusdt=SwapQuoteMath.format(receipt.musdt,6);
+                if (receipt.bkc!=null) record.actualBkc=SwapQuoteMath.format(receipt.bkc,18);
+                if (receipt.lp!=null) record.actualLp=SwapQuoteMath.format(receipt.lp,18);
+                if (receipt.gasCost!=null) record.gasCost=SwapQuoteMath.format(receipt.gasCost,18);
+                TokenTxHistoryStore.upsertSwap(app,wallet,record);
+                if (!"PENDING".equals(record.status)) break;
+                if (i<2) Thread.sleep(2500);
+                continue;
+            }
             SwapReceipt receipt = client.receipt(key, record.txHash, SwapAsset.valueOf(record.fromAsset),
                     SwapAsset.valueOf(record.toAsset), new BigInteger(record.inputUnits), wallet);
             record.status = receipt.status;

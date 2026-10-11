@@ -33,6 +33,7 @@ public final class BrokerSwapClient {
             .retryOnConnectionFailure(false).build();
     private final BrokerSwapConfig cfg;
     public BrokerSwapClient(BrokerSwapConfig config) { cfg = config; }
+    BrokerSwapConfig deployment() { return cfg; }
     private String post(String url, Object body) throws IOException {
         Request request = new Request.Builder().url(url).post(RequestBody.create(
                 MediaType.parse("application/json; charset=utf-8"), GSON.toJson(body))).build();
@@ -105,6 +106,29 @@ public final class BrokerSwapClient {
         if (!expected.equalsIgnoreCase(BrokerSwapAbi.address(read(key, contract, BrokerSwapAbi.call(getter)))))
             throw new IOException("Swap " + getter + " does not match");
     }
+    /** Independently validates the atomic liquidity router; never uses the old full router. */
+    public void validateLiquidity(String key) throws Exception {
+        if (ChainConfig.useLocalBrokerChainNode() || !cfg.hasLiquidity()
+                || !SwapReceipt.quantity(rpc("eth_chainId")).equals(BigInteger.valueOf(cfg.chainId())))
+            throw new IOException("Liquidity network does not match");
+        String code = rpc("eth_getCode", cfg.liquidityRouter(), "latest");
+        if (!code.matches("0x([0-9a-fA-F]{2})+") || !Hash.sha3(code).equalsIgnoreCase(cfg.liquidityRouterCodeHash()))
+            throw new IOException("Liquidity Router code does not match");
+        checkAddress(key, cfg.liquidityRouter(), "factory", cfg.factory());
+        checkAddress(key, cfg.liquidityRouter(), "WBKC", cfg.wbkc());
+        checkAddress(key, cfg.liquidityRouter(), "musdt", cfg.musdt());
+        checkAddress(key, cfg.liquidityRouter(), "pair", cfg.pair());
+        boolean musdt0 = cfg.musdt().compareTo(cfg.wbkc()) < 0;
+        checkAddress(key, cfg.pair(), "token0", musdt0 ? cfg.musdt() : cfg.wbkc());
+        checkAddress(key, cfg.pair(), "token1", musdt0 ? cfg.wbkc() : cfg.musdt());
+        for (String token : new String[]{cfg.musdt(), cfg.wbkc(), cfg.pair()})
+            if (!BrokerSwapAbi.words(read(key, token, BrokerSwapAbi.call("decimals")), 1)[0]
+                    .equals(BigInteger.valueOf(token.equals(cfg.musdt()) ? 6 : 18)))
+                throw new IOException("Liquidity token decimals do not match");
+    }
+    public BigInteger totalSupply(String key) throws Exception {
+        return BrokerSwapAbi.words(read(key, cfg.pair(), BrokerSwapAbi.call("totalSupply")), 1)[0];
+    }
     public SwapPoolSnapshot pool(String key) throws Exception {
         BigInteger[] r = BrokerSwapAbi.words(read(key, cfg.pair(), BrokerSwapAbi.call("getReserves")), 3);
         if (r[0].bitLength() > 112 || r[1].bitLength() > 112 || r[2].bitLength() > 32)
@@ -118,8 +142,13 @@ public final class BrokerSwapClient {
                 : BrokerSwapAbi.words(read(key, contract, BrokerSwapAbi.call("balanceOf", new Address(wallet))), 1)[0];
     }
     public BigInteger allowance(String key, String wallet, String token) throws Exception {
+        return allowance(key, wallet, token, cfg.router());
+    }
+    public BigInteger allowance(String key, String wallet, String token, String spender) throws Exception {
+        if (!cfg.router().equalsIgnoreCase(spender) && !(cfg.hasLiquidity() && cfg.liquidityRouter().equalsIgnoreCase(spender)))
+            throw new IllegalArgumentException("Unverified allowance spender");
         wallet = BrokerSwapConfig.walletAddress(wallet);
-        return BrokerSwapAbi.words(read(key, token, BrokerSwapAbi.call("allowance", new Address(wallet), new Address(cfg.router()))), 1)[0];
+        return BrokerSwapAbi.words(read(key, token, BrokerSwapAbi.call("allowance", new Address(wallet), new Address(spender))), 1)[0];
     }
     /** Conservative reserve, not a fee guarantee: Dash chooses the execution gas price. */
     public BigInteger gasReserve() throws Exception {
@@ -135,12 +164,15 @@ public final class BrokerSwapClient {
         return SwapReceipt.sentHash(post(ChainConfig.getDashGatewayPostUrl("eth_sendTransaction"), request));
     }
     public SwapReceipt receipt(String key, String hash, SwapAsset from, SwapAsset to, BigInteger input, String wallet) throws Exception {
+        return SwapReceipt.parse(receiptRaw(key, hash), hash, cfg, from, to, input, wallet);
+    }
+    public String receiptRaw(String key, String hash) throws Exception {
+        if (!SwapReceipt.validHash(hash)) throw new IllegalArgumentException("Invalid receipt hash");
         String uuid = UUID.randomUUID().toString(), bodyHash = hash.substring(2);
         String[] sig = SecurityUtil.signECDSA(key, uuid + bodyHash);
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("uuid", bodyHash); request.put("PublicKey", SecurityUtil.getPublicKeyFromPrivateKey(key));
         request.put("RandomStr", uuid); request.put("Sign1", sig[0]); request.put("Sign2", sig[1]);
-        return SwapReceipt.parse(post(ChainConfig.getDashGatewayPostUrl("eth_getTransactionReceipt"), request),
-                hash, cfg, from, to, input, wallet);
+        return post(ChainConfig.getDashGatewayPostUrl("eth_getTransactionReceipt"), request);
     }
 }

@@ -11,6 +11,7 @@ import java.util.Locale;
 public final class BrokerSwapConfig {
     private long chainId;
     private String factory, router, pair, wbkc, musdt, routerCodeHash;
+    private String liquidityRouter, liquidityRouterCodeHash;
 
     public static BrokerSwapConfig load(Context context) throws Exception {
         try (InputStream in = context.getAssets().open("broker_swap_deployment.json")) {
@@ -34,6 +35,13 @@ public final class BrokerSwapConfig {
         if (config.routerCodeHash == null || !config.routerCodeHash.matches("0x[0-9a-fA-F]{64}"))
             throw new IllegalArgumentException("Missing router code fingerprint");
         config.routerCodeHash = config.routerCodeHash.toLowerCase(Locale.US);
+        if (config.liquidityRouter != null || config.liquidityRouterCodeHash != null) {
+            config.liquidityRouter = address(config.liquidityRouter);
+            if (config.liquidityRouterCodeHash == null || !config.liquidityRouterCodeHash.matches("0x[0-9a-fA-F]{64}"))
+                throw new IllegalArgumentException("Missing liquidity router fingerprint");
+            config.liquidityRouterCodeHash = config.liquidityRouterCodeHash.toLowerCase(Locale.US);
+            if (config.liquidityRouter.equals(config.router)) throw new IllegalArgumentException("Liquidity and swap routers differ");
+        }
         return config;
     }
 
@@ -63,6 +71,12 @@ public final class BrokerSwapConfig {
     public String wbkc() { return wbkc; }
     public String musdt() { return musdt; }
     public String routerCodeHash() { return routerCodeHash; }
+    public boolean hasLiquidity() { return liquidityRouter != null; }
+    public String liquidityRouter() {
+        if (!hasLiquidity()) throw new IllegalStateException("Liquidity deployment is not configured");
+        return liquidityRouter;
+    }
+    public String liquidityRouterCodeHash() { return liquidityRouterCodeHash; }
 
     public String tokenAddress(SwapAsset asset, String originalWrapped) {
         switch (asset) {

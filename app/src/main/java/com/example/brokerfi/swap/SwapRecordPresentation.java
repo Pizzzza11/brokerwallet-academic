@@ -17,6 +17,7 @@ public final class SwapRecordPresentation {
         }
     }
     public static String details(TokenTxRecord r) {
+        if (r.isLiquidity()) return liquidityDetails(r);
         boolean approval = "APPROVAL".equals(r.type);
         return status(r.status) + "\n" + (approval ? "授权限额：" : "支付：") + r.amountDisplay + " " + r.fromSymbol
                 + (approval ? "\n授权对象：" + r.routerAddress : "\n预计到账：" + r.estimatedOutput + " " + r.toSymbol
@@ -28,5 +29,24 @@ public final class SwapRecordPresentation {
                 + (approval ? "" : "\n到账资产合约：" + (r.toContractAddress == null || r.toContractAddress.isEmpty() ? "原生 BKC" : r.toContractAddress))
                 + "\n手续费：" + (r.gasCost == null ? "待核实" : r.gasCost + " BKC")
                 + "\n交易编号：" + (r.txHash == null ? "尚未取得，请先核查链上结果" : r.txHash);
+    }
+    public static String label(TokenTxRecord r) {
+        if (r.isLiquidity()) return r.liquidityAction.startsWith("APPROVE") ? "流动性授权" : "ADD".equals(r.liquidityAction) ? "添加流动性" : "撤出流动性";
+        return "APPROVAL".equals(r.type) ? "授权" : "兑换";
+    }
+    private static String liquidityDetails(TokenTxRecord r) {
+        String amounts=r.liquidityAction.startsWith("APPROVE") ? "授权限额："+r.amountDisplay+" "+r.fromSymbol
+                : "输入："+r.amountDisplay+"\n预计 LP："+(r.estimatedLp==null?"—":r.estimatedLp)
+                +"\n实际 LP："+(r.actualLp==null?"待核实":r.actualLp)
+                +"\n实际 BKC："+(r.actualBkc==null?"待核实":r.actualBkc)
+                +"\n实际 mUSDT："+(r.actualMusdt==null?"待核实":r.actualMusdt)
+                +"\n最低 BKC："+units(r.minimumBkcUnits,18)+"\n最低 mUSDT："+units(r.minimumMusdtUnits,6)
+                + ("ADD".equals(r.liquidityAction)?"\n最低 LP："+units(r.minimumLpUnits,18):"");
+        return label(r)+" · "+status(r.status)+"\n"+amounts+"\n网络："+r.chainId+"\nRouter："+r.routerAddress
+                +"\n手续费："+(r.gasCost==null?"待核实":r.gasCost+" BKC")
+                +"\n交易编号："+(r.txHash==null?"尚未取得，请先核查链上结果":r.txHash);
+    }
+    private static String units(String value,int decimals) {
+        return value==null ? "—" : SwapQuoteMath.format(new java.math.BigInteger(value),decimals);
     }
 }
