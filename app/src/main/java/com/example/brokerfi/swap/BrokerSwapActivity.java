@@ -19,7 +19,6 @@ import com.example.brokerfi.token.TokenItem;
 import com.example.brokerfi.token.TokenStore;
 import com.example.brokerfi.token.TokenSwapActivity;
 import com.example.brokerfi.token.TokenTopBarHelper;
-import com.example.brokerfi.token.TokenTxDetailDialog;
 import com.example.brokerfi.token.TokenTxHistoryStore;
 import com.example.brokerfi.token.TokenTxRecord;
 import com.example.brokerfi.token.TokenWalletHelper;
@@ -33,7 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Wallet-side MiniV2 integration. Native↔old wBKC remains available without a Swap server. */
+/** Assets → Trade adapter. The homepage's original Swap screen remains independent. */
 public class BrokerSwapActivity extends AppCompatActivity {
     private static final ExecutorService READS = Executors.newFixedThreadPool(2);
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -50,11 +49,14 @@ public class BrokerSwapActivity extends AppCompatActivity {
     private TextView receive, status, details, paySymbol, receiveSymbol, payBalanceView, receiveBalanceView;
     private Button submit, slipButton;
     private SwipeRefreshLayout refresh;
+    private LiquidityPanelController liquidity;
+    private TradeHistory swapHistory;
+    private boolean liquidityVisible;
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (!resumed) return;
             render();
-            if (!loading && !confirming && !preparing && error.isEmpty() && !SwapOperationRunner.active(wallet)) fetch();
+            if (!liquidityVisible && !loading && !locked() && error.isEmpty()) fetch();
             main.postDelayed(this, 15000);
         }
     };
@@ -62,7 +64,9 @@ public class BrokerSwapActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_token_swap);
         TokenTopBarHelper.bind(this);
-        ((TextView)findViewById(R.id.token_page_title)).setText(R.string.broker_swap_title);
+        ((TextView)findViewById(R.id.token_page_title)).setText(R.string.trade_title);
+        findViewById(R.id.token_info_button).setVisibility(View.GONE);
+        findViewById(R.id.trade_tabs).setVisibility(View.VISIBLE);
         amount = findViewById(R.id.token_pay_amount); receive = findViewById(R.id.token_receive_amount);
         amount.setSingleLine(true);
         status = findViewById(R.id.broker_swap_status); details = findViewById(R.id.broker_swap_details);
@@ -103,8 +107,12 @@ public class BrokerSwapActivity extends AppCompatActivity {
                         slippage = new int[]{50,100,200,500}[which]; render();
                     }).show();
         });
-        findViewById(R.id.broker_swap_history).setOnClickListener(v -> history());
-        refresh.setOnRefreshListener(this::fetch);
+        findViewById(R.id.broker_swap_history).setVisibility(View.GONE);
+        swapHistory=new TradeHistory(this,R.id.trade_swap_history_toggle,R.id.trade_swap_history_rows,false);
+        liquidity=new LiquidityPanelController(this,config,() -> confirming || preparing,this::liquidityChanged);
+        findViewById(R.id.trade_tab_swap).setOnClickListener(v -> setLiquidity(false));
+        findViewById(R.id.trade_tab_liquidity).setOnClickListener(v -> setLiquidity(true));
+        refresh.setOnRefreshListener(() -> { if(liquidityVisible)liquidity.fetch(); else fetch(); });
         submit.setOnClickListener(v -> confirm());
         amount.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
@@ -112,6 +120,7 @@ public class BrokerSwapActivity extends AppCompatActivity {
             public void afterTextChanged(Editable s) { }
         });
         render();
+        updateTabs();
     }
     @Override protected void onResume() {
         super.onResume(); resumed = true;
@@ -119,14 +128,33 @@ public class BrokerSwapActivity extends AppCompatActivity {
         if (!current.equalsIgnoreCase(wallet)) {
             wallet = current; generation++; validatedAt = 0; clearRead();
         }
+        liquidity.onResume(wallet);
         fetch(); resumePending(); main.removeCallbacks(tick); main.postDelayed(tick, 15000);
     }
-    @Override protected void onPause() { resumed = false; main.removeCallbacks(tick); super.onPause(); }
-    @Override protected void onDestroy() { main.removeCallbacks(tick); super.onDestroy(); }
+    @Override protected void onPause() { resumed = false; main.removeCallbacks(tick); if(liquidity!=null)liquidity.onPause(); super.onPause(); }
+    @Override protected void onDestroy() { main.removeCallbacks(tick); if(liquidity!=null)liquidity.onDestroy(); super.onDestroy(); }
+    private void setLiquidity(boolean value) {
+        if(locked())return;
+        liquidityVisible=value;
+        findViewById(R.id.trade_swap_content).setVisibility(value?View.GONE:View.VISIBLE);
+        findViewById(R.id.trade_liquidity_content).setVisibility(value?View.VISIBLE:View.GONE);
+        liquidity.setVisible(value); updateTabs(); if(!value)fetch();
+    }
+    private void updateTabs() {
+        findViewById(R.id.trade_tab_swap).setSelected(!liquidityVisible);
+        findViewById(R.id.trade_tab_liquidity).setSelected(liquidityVisible);
+        findViewById(R.id.trade_tab_swap).setEnabled(!locked());
+        findViewById(R.id.trade_tab_liquidity).setEnabled(!locked());
+    }
+    private void liquidityChanged() {
+        if(isDestroyed())return;
+        if(liquidityVisible)refresh.setRefreshing(liquidity.loading());
+        render(); updateTabs();
+    }
     private String contract(SwapAsset asset) { return config.tokenAddress(asset, original); }
     private boolean amm() { return SwapAsset.isAmm(from, to); }
     private boolean supported() { return amm() || SwapAsset.isWrap(from, to) || SwapAsset.isUnwrap(from, to); }
-    private boolean locked() { return confirming || preparing || SwapOperationRunner.active(wallet); }
+    private boolean locked() { return confirming || preparing || liquidity!=null && liquidity.busy() || SwapOperationRunner.active(wallet); }
     private boolean sameAccount(String address) { return address.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(this))); }
     private boolean fresh() { return readAt > 0 && SystemClock.elapsedRealtime() - readAt <= SwapPoolSnapshot.MAX_AGE_MS; }
     private void clearRead() { pool = null; readAt = 0; nativeBalance = payBalance = receiveBalance = allowance = gasReserve = null; }
@@ -153,6 +181,7 @@ public class BrokerSwapActivity extends AppCompatActivity {
         }).show();
     }
     private void fetch() {
+        if(liquidityVisible)return;
         if (config == null || wallet.isEmpty() || preparing || confirming) { refresh.setRefreshing(false); render(); return; }
         if (loading) return;
         loading = true; error = ""; render();
@@ -246,32 +275,43 @@ public class BrokerSwapActivity extends AppCompatActivity {
         paySymbol.setText(from.symbol); receiveSymbol.setText(to.symbol);
         ((TextView)findViewById(R.id.token_pay_token_icon)).setText(from==SwapAsset.MUSDT ? "m" : "B");
         ((TextView)findViewById(R.id.token_receive_token_icon)).setText(to==SwapAsset.MUSDT ? "m" : "B");
-        payBalanceView.setText("余额：" + (payBalance==null ? "读取中 / 未验证" : SwapQuoteMath.format(payBalance,from.decimals)));
-        receiveBalanceView.setText("余额：" + (receiveBalance==null ? "读取中 / 未验证" : SwapQuoteMath.format(receiveBalance,to.decimals)));
-        slipButton.setText("滑点：" + slippage/100.0 + "%（点击调整）"); slipButton.setEnabled(!locked() && amm());
+        payBalanceView.setText("余额：" + TradeDisplay.amount(payBalance,from.decimals));
+        receiveBalanceView.setText("余额：" + TradeDisplay.amount(receiveBalance,to.decimals));
+        slipButton.setText("Slippage：" + slippage/100.0 + "% ▾"); slipButton.setEnabled(!locked() && amm());
         amount.setEnabled(!locked());
-        status.setText(getString(R.string.broker_swap_test_notice) + "\n" + (wallet.isEmpty() ? "请先登录钱包" : preparing ? "发送前重新检查…"
-                : SwapOperationRunner.active(wallet) ? "交易处理中，请勿重复操作" : loading ? "正在读取链上数据…" : error.isEmpty() ? "网络 1051 · 已验证资产 / 金额精度" : error));
+        TokenTxRecord pending=unresolved();
+        status.setText("mUSDT 是测试资产，两种 wBKC 不可混用。\n" + (wallet.isEmpty() ? "请先登录钱包" : preparing ? "发送前重新检查…"
+                : SwapOperationRunner.active(wallet) ? "交易处理中，请勿重复操作" : pending!=null ? "有未确认交易，点击此处核查（不重发）"
+                : loading ? "正在读取链上数据…" : error.isEmpty() ? "网络 1051" : error)
+                +(pending!=null ? loading?"\n正在读取链上数据…":!error.isEmpty()?"\n"+error:"":""));
+        status.setTextColor(pending!=null || !error.isEmpty()?0xff991B1B:0xff475569);
+        status.setOnClickListener(v -> { TokenTxRecord r=unresolved(); if(r!=null)TradeHistory.showRecord(this,config,wallet,r,() -> { render(); fetch(); }); });
+        if(swapHistory!=null)swapHistory.bind(config,wallet,() -> { render(); fetch(); });
+        updateTabs();
         receive.setText("—"); details.setText(""); submit.setEnabled(false);
         if (config == null || wallet.isEmpty()) { submit.setText("钱包或部署未就绪"); return; }
         try {
             BigInteger input = SwapQuoteMath.parseUnits(amount.getText().toString(), from.decimals);
             SwapQuoteMath.Quote q = amm() ? quote(input) : null;
             BigInteger output = q==null ? input : q.output;
-            receive.setText(SwapQuoteMath.format(output,to.decimals));
-            details.setText(q==null ? "包装 / 解包：1 : 1，无资金池兑换费" : quoteDetails(q));
+            receive.setText(TradeDisplay.amount(output,to.decimals));
+            details.setText(q==null ? "Rate：1 : 1 · 包装 / 解包\nMin received："+TradeDisplay.amount(input,to.decimals)+" "+to.symbol
+                    : "Rate："+TradeDisplay.rate(q)+"\nMin received："+TradeDisplay.amount(q.minimum,q.to.decimals)+" "+q.to.symbol
+                        +(q.impactBps>=200?"\n价格影响："+q.impactBps/100.0+"%（较高风险）":""));
             String problem = validation(input,q);
-            submit.setText(!problem.isEmpty() ? problem : needsApproval(input) ? "先授权本次金额（不会立即兑换）" : "确认兑换");
+            submit.setText(!problem.isEmpty() ? problem : locked()?"处理中，请勿重复操作":needsApproval(input) ? "Approve（仅本次金额）" : "Swap");
             // A background refresh must not disable a still-valid snapshot. validation() and the
             // final preflight enforce freshness, current balances, current allowance and minimum out.
             submit.setEnabled(problem.isEmpty() && !locked());
-        } catch (Exception e) { submit.setText(preparing ? "发送前重新检查…" : SwapOperationRunner.active(wallet) ? "交易处理中，请勿重复操作"
+        } catch (Exception e) { submit.setText(preparing ? "发送前重新检查…" : SwapOperationRunner.active(wallet) ? "交易处理中，请勿重复操作" : pending!=null?"未确认交易，已禁止新交易"
                 : amount.getText().length()==0 ? "请输入金额"
                 : loading && pool==null ? "正在读取链上报价" : "金额精度不符、报价过期或金额太小"); }
+        TradeButtons.state(submit,submit.getText().toString(),submit.isEnabled(),pending!=null || !error.isEmpty() || !loading && readAt>0 && !fresh());
     }
     private String quoteDetails(SwapQuoteMath.Quote q) {
         return "预计到账：" + SwapQuoteMath.format(q.output,q.to.decimals) + " " + q.to.symbol
                 + "\n最低到账：" + SwapQuoteMath.format(q.minimum,q.to.decimals) + " " + q.to.symbol
+                + "\n兑换比例：" + TradeDisplay.rate(q) + "\n滑点：" + q.slippageBps/100.0 + "%"
                 + "\n兑换费：0.3%（报价已包含）　价格影响：" + q.impactBps/100.0 + "%"
                 + (q.impactBps>=200 ? "\n警告：交易量相对资金池较大" : "")
                 + "\n手续费预留：" + SwapQuoteMath.format(requiredGas(),18) + " BKC（估算，非保证）";
@@ -318,9 +358,11 @@ public class BrokerSwapActivity extends AppCompatActivity {
                 BigInteger reserve = client.gasReserve().multiply(BigInteger.valueOf(confirmed!=null && pay!=SwapAsset.BKC ? 2 : 1));
                 if (balance.compareTo(input)<0 || nativeAmount.compareTo(reserve.add(pay==SwapAsset.BKC ? input : BigInteger.ZERO))<0)
                     throw new IllegalStateException("余额或手续费不足");
+                SwapPoolSnapshot latestPool=null;
                 if (confirmed!=null) {
                     stage = "最新资金池报价";
-                    SwapQuoteMath.Quote current = SwapQuoteMath.quote(client.pool(key),pay,out,input,confirmed.slippageBps,SystemClock.elapsedRealtime());
+                    latestPool=client.pool(key);
+                    SwapQuoteMath.Quote current = SwapQuoteMath.quote(latestPool,pay,out,input,confirmed.slippageBps,SystemClock.elapsedRealtime());
                     if (current.output.compareTo(confirmed.minimum)<0 || current.blocked()
                             || current.impactBps>=500 && confirmed.impactBps<500)
                         throw new IllegalStateException("价格已变动，请刷新后重新确认");
@@ -328,6 +370,7 @@ public class BrokerSwapActivity extends AppCompatActivity {
                     if (!approval && pay!=SwapAsset.BKC && client.allowance(key,address,contract(pay)).compareTo(input)<0)
                         throw new IllegalStateException("授权不足，请重新授权本次金额");
                 }
+                if(latestPool!=null && !latestPool.isFresh(SystemClock.elapsedRealtime()))throw new IllegalStateException("Quote expired");
                 stage = "交易编码";
                 String target, data; BigInteger value = BigInteger.ZERO;
                 if (approval) { target=contract(pay); data=BrokerSwapAbi.call("approve",new Address(config.router()),new Uint256(input)); }
@@ -335,9 +378,11 @@ public class BrokerSwapActivity extends AppCompatActivity {
                 else { target=contract(pay.isWrapped()?pay:out); data=pay==SwapAsset.BKC ? wrappedBkcContractHelper.encodeDeposit() : wrappedBkcContractHelper.encodeWithdraw(input); if(pay==SwapAsset.BKC)value=input; }
                 TokenTxRecord record = record(pay,out,input,confirmed,approval);
                 final String sendTarget=target,sendData=data; final BigInteger sendValue=value;
+                final SwapPoolSnapshot finalPool=latestPool;
                 main.post(() -> {
                     preparing=false;
                     if (isDestroyed() || id!=generation || !sameAccount(address)) { render(); return; }
+                    if(finalPool!=null && !finalPool.isFresh(SystemClock.elapsedRealtime())) { clearRead(); error="报价已过期，未发交易。请刷新后重新确认。"; render(); return; }
                     if (!SwapOperationRunner.submit(getApplicationContext(),config,address,record,sendTarget,sendData,sendValue,this::completed))
                         toast("已有交易在处理中");
                     render();
@@ -367,6 +412,7 @@ public class BrokerSwapActivity extends AppCompatActivity {
     private void completed(TokenTxRecord record) {
         if (isDestroyed()) return;
         toast(SwapRecordPresentation.status(record.status)); clearRead(); fetch(); render();
+        liquidity.changed();
         if ("SUCCESS".equals(record.status) && !"APPROVAL".equals(record.type)) amount.setText("");
     }
     private void resumePending() {
@@ -374,33 +420,6 @@ public class BrokerSwapActivity extends AppCompatActivity {
         TokenTxRecord pending=unresolved();
         if (pending!=null && SwapReceipt.validHash(pending.txHash))
             SwapOperationRunner.resume(getApplicationContext(),config,wallet,pending,this::completed);
-    }
-    private void history() {
-        List<TokenTxRecord> list = new ArrayList<>();
-        for(TokenTxRecord r:TokenTxHistoryStore.getAll(this,wallet)) if(r.status!=null)list.add(r);
-        if(list.isEmpty()) { toast("暂无兑换记录"); return; }
-        String[] labels=new String[list.size()];
-        for(int i=0;i<labels.length;i++) { TokenTxRecord r=list.get(i); labels[i]=("APPROVAL".equals(r.type)?"授权 · ":"兑换 · ")+SwapRecordPresentation.status(r.status)+" · "+r.amountDisplay+" "+r.fromSymbol; }
-        new AlertDialog.Builder(this).setTitle("兑换 / 授权记录").setItems(labels,(d,which)-> {
-            TokenTxRecord r=list.get(which);
-            if(TokenTxHistoryStore.isUnresolvedSwap(r) && SwapReceipt.validHash(r.txHash)) {
-                new AlertDialog.Builder(this).setTitle("等待确认") .setMessage(SwapRecordPresentation.details(r))
-                        .setPositiveButton("再查询一次",(d2,w)-> { SwapOperationRunner.resume(getApplicationContext(),config,wallet,r,this::completed); render(); })
-                        .setNegativeButton("关闭",null).show();
-            } else if (TokenTxHistoryStore.isUnresolvedSwap(r) && !SwapOperationRunner.active(wallet)) {
-                new AlertDialog.Builder(this).setTitle("发送结果未知")
-                        .setMessage(SwapRecordPresentation.details(r) + "\n\n没有交易编号并不代表没有发出。请先核对链上记录、余额和授权。确认未重复后才可人工解除锁定。")
-                        .setNegativeButton("关闭", null)
-                        .setPositiveButton("我已核查链上结果", (d2,w) -> new AlertDialog.Builder(this)
-                                .setTitle("解除锁定可能导致重复交易")
-                                .setMessage("此操作不会撤销或重发交易，只解除本机防重复锁。你已核实原交易的最终结果吗？")
-                                .setNegativeButton("保留锁定", null).setPositiveButton("已核实，解除锁定", (d3,w3) -> {
-                                    r.status="ACKNOWLEDGED";
-                                    if (!TokenTxHistoryStore.upsertSwap(this,wallet,r)) toast("保存失败，仍需核查");
-                                    render();
-                                }).show()).show();
-            } else TokenTxDetailDialog.show(this,r,wallet,r.contractAddress);
-        }).show();
     }
     private void toast(String message) { Toast.makeText(this,message,Toast.LENGTH_LONG).show(); }
 }

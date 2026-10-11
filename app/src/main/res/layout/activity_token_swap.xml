@@ -20,11 +20,13 @@
         android:layout_below="@id/token_sub_header">
 
         <androidx.core.widget.NestedScrollView
+            android:id="@+id/trade_scroll"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:fillViewport="true">
 
             <LinearLayout
+                android:id="@+id/trade_scroll_body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:clipChildren="false"
@@ -35,6 +37,25 @@
                 android:paddingEnd="16dp"
                 android:paddingBottom="28dp">
 
+                <LinearLayout
+                    android:id="@+id/trade_tabs"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="18dp"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+                    <Button android:id="@+id/trade_tab_swap"
+                        android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp"
+                        android:text="Swap" android:textAllCaps="false" android:textSize="14sp"
+                        android:background="@drawable/trade_tab" android:backgroundTint="@null" />
+                    <Button android:id="@+id/trade_tab_liquidity"
+                        android:layout_width="0dp" android:layout_weight="1" android:layout_height="48dp"
+                        android:text="Provide Liquidity" android:textAllCaps="false" android:textSize="14sp"
+                        android:background="@drawable/trade_tab" android:backgroundTint="@null" />
+                </LinearLayout>
+                <LinearLayout android:id="@+id/trade_swap_content"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical">
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -331,6 +352,7 @@
                         android:id="@+id/broker_swap_history"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
+                        android:visibility="gone"
                         android:text="@string/broker_swap_history"
                         android:textAllCaps="false" />
                 </LinearLayout>
@@ -350,6 +372,18 @@
                     android:textColor="@color/white"
                     android:textSize="17sp"
                     android:textStyle="bold" />
+                <Button android:id="@+id/trade_swap_history_toggle"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp" android:text="Swap History ▾"
+                    android:textAllCaps="false" android:visibility="gone" />
+                <LinearLayout android:id="@+id/trade_swap_history_rows"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical" android:visibility="gone" />
+                </LinearLayout>
+                <include android:id="@+id/trade_liquidity_content"
+                    layout="@layout/include_trade_liquidity"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:visibility="gone" />
             </LinearLayout>
         </androidx.core.widget.NestedScrollView>
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>

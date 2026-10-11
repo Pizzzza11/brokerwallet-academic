@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+    <TextView android:id="@+id/lp_status" style="@style/TradeText" android:text="mUSDT 是测试资产。添加／撤出使用链上原子合约。" />
+    <LinearLayout style="@style/TradeCard">
+        <TextView style="@style/TradeHeading" android:text="Add Liquidity" />
+        <TextView style="@style/TradeText" android:text="BKC Amount" />
+        <EditText android:id="@+id/lp_bkc_amount" style="@style/TradeAmount" android:contentDescription="添加流动性的 BKC 金额" />
+        <TextView android:id="@+id/lp_bkc_balance" style="@style/TradeText" />
+        <TextView style="@style/TradeText" android:text="mUSDT Amount" />
+        <EditText android:id="@+id/lp_musdt_amount" style="@style/TradeAmount" android:contentDescription="添加流动性的 mUSDT 金额" />
+        <TextView android:id="@+id/lp_musdt_balance" style="@style/TradeText" />
+        <TextView android:id="@+id/lp_add_quote" style="@style/TradeText" android:text="输入任一金额，另一项按池内比例联动。" />
+        <TextView android:id="@+id/lp_owned" style="@style/TradeText" android:text="Your LP tokens：—" />
+        <Button android:id="@+id/lp_approve_add" style="@style/TradeAction" android:text="Approve mUSDT" />
+        <Button android:id="@+id/lp_add" style="@style/TradeAction" android:text="Add Liquidity" />
+    </LinearLayout>
+    <LinearLayout style="@style/TradeCard">
+        <TextView style="@style/TradeHeading" android:text="Your Liquidity Position" />
+        <TextView android:id="@+id/lp_position" style="@style/TradeText" android:text="下拉刷新读取链上持仓。" />
+        <TextView android:id="@+id/lp_fees" style="@style/TradeText" />
+        <TextView style="@style/TradeText" android:text="Position change：成本记录不足，暂不计算盈亏。手续费已留在池内，不能单独领取。" android:textSize="11sp" />
+    </LinearLayout>
+    <LinearLayout style="@style/TradeCard">
+        <TextView style="@style/TradeHeading" android:text="Remove Liquidity" />
+        <TextView android:id="@+id/lp_remove_percent" style="@style/TradeText" android:text="撤出比例：0%" />
+        <SeekBar android:id="@+id/lp_remove_slider" android:layout_width="match_parent" android:layout_height="48dp" android:max="100" android:contentDescription="撤出流动性的百分比" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+            <Button android:id="@+id/lp_percent_25" style="@style/TradePercent" android:text="25%" />
+            <Button android:id="@+id/lp_percent_50" style="@style/TradePercent" android:text="50%" />
+            <Button android:id="@+id/lp_percent_75" style="@style/TradePercent" android:text="75%" />
+            <Button android:id="@+id/lp_percent_100" style="@style/TradePercent" android:text="100%" />
+        </LinearLayout>
+        <TextView android:id="@+id/lp_remove_quote" style="@style/TradeText" android:text="Estimated receive：—" />
+        <Button android:id="@+id/lp_approve_remove" style="@style/TradeAction" android:text="Approve LP" />
+        <Button android:id="@+id/lp_remove" style="@style/TradeAction" android:text="Remove Liquidity" />
+    </LinearLayout>
+    <Button android:id="@+id/lp_history_toggle" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="LP History ▾" android:textAllCaps="false" />
+    <LinearLayout android:id="@+id/lp_history_rows" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:visibility="gone" />
+</LinearLayout>

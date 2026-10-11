@@ -70,6 +70,7 @@ public class TokenDetailActivity extends AppCompatActivity {
     private BigInteger tokenBalance = BigInteger.ZERO;
     private final java.util.concurrent.ExecutorService assetReads=java.util.concurrent.Executors.newSingleThreadExecutor();
     private boolean nativeLoading;
+    private boolean nativeBalanceKnown;
     private int assetGeneration;
 
     @Override
@@ -148,14 +149,17 @@ public class TokenDetailActivity extends AppCompatActivity {
 
     private void resolveAccount() {
         privateKey = TokenWalletHelper.getCurrentPrivateKey(this);
-        walletAddress = TokenWalletHelper.getWalletAddress(this);
+        String current=TokenWalletHelper.getWalletAddress(this);
+        if(!TextUtils.equals(walletAddress,current)) { assetGeneration++; nativeBalanceKnown=false; tokenBalance=BigInteger.ZERO; }
+        walletAddress=current;
     }
 
     private void reloadSelectedToken() {
-        assetGeneration++;
         String previous=selectedToken==null?"":selectedToken.getContractAddress();
         selectedToken = TokenSelection.ensureValidSelection(this);
-        if(selectedToken!=null && !selectedToken.getContractAddress().equals(previous))tokenBalance=BigInteger.ZERO;
+        if(selectedToken!=null && !selectedToken.getContractAddress().equals(previous)) {
+            assetGeneration++; nativeBalanceKnown=false; tokenBalance=BigInteger.ZERO;
+        }
         applyCachedBalance();
         applySelectedTokenUi();
         refreshTxHistory();
@@ -167,11 +171,10 @@ public class TokenDetailActivity extends AppCompatActivity {
             return;
         }
         String symbol = selectedToken.getSymbol();
-        String name = selectedToken.getName();
-        pageTitle.setText(name);
+        pageTitle.setText(symbol);
         balanceText.setText(
-                TradeDisplay.amount(tokenBalance, selectedToken.getDecimals())
-                        + " " + symbol);
+                selectedToken.isNative() && !nativeBalanceKnown ? getString(R.string.token_balance_loading)
+                        : TradeDisplay.amount(tokenBalance, selectedToken.getDecimals())+" "+symbol);
 
         tokenIcon.setText(TokenItem.iconLetter(symbol));
 
@@ -222,9 +225,15 @@ public class TokenDetailActivity extends AppCompatActivity {
             return false;
         }
         if (selectedToken.isNative()) {
-            String cached=TokenBalanceCache.getNativeBalanceDisplay(walletAddress);
+            TokenBalanceCache.Snapshot nativeSnapshot=TokenBalanceCache.getSnapshot(walletAddress,TokenItem.NATIVE_BKC);
+            if(nativeSnapshot!=null) {
+                tokenBalance=nativeSnapshot.tokenBalance; nativeBalanceKnown=true;
+                balanceText.setText(TradeDisplay.amount(tokenBalance,18)+" BKC");return true;
+            }
+            String cached=TokenBalanceCache.hasNativeBalance(walletAddress)?TokenBalanceCache.getNativeBalanceDisplay(walletAddress):null;
             if (cached==null) return false;
             try { tokenBalance=new java.math.BigDecimal(cached).movePointRight(18).toBigIntegerExact();
+                nativeBalanceKnown=true;
                 balanceText.setText(TradeDisplay.amount(tokenBalance,18)+" BKC");return true; }
             catch (RuntimeException e) { return false; }
         }
@@ -506,6 +515,7 @@ public class TokenDetailActivity extends AppCompatActivity {
                     if(isFinishing() || id!=assetGeneration || selectedToken==null || !selectedToken.isNative()
                             || !address.equalsIgnoreCase(TokenWalletHelper.getWalletAddress(this)))return;
                     tokenBalance=units;String exact=SwapQuoteMath.format(units,18);
+                    nativeBalanceKnown=true;
                     TokenBalanceCache.store(address,TokenItem.NATIVE_BKC,exact,units);
                     balanceText.setText(TradeDisplay.amount(units,18)+" BKC");
                 });

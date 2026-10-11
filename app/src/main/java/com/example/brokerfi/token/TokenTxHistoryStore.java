@@ -231,19 +231,7 @@ public final class TokenTxHistoryStore {
             if (isMisclassifiedPeerGetTx2Record(record)) {
                 continue;
             }
-            String recordContract = ChainAddressUtil.normalizeAddress(record.contractAddress);
-            if (TextUtils.isEmpty(recordContract)) {
-                if (TokenTxRecord.isSwapType(record.type)) {
-                    recordContract = defaultContract;
-                } else if (hasHexTxHash(record.txHash)) {
-                    recordContract = defaultContract;
-                } else {
-                    continue;
-                }
-            }
-            boolean nativeLeg=TokenItem.NATIVE_BKC.equals(target) && record.status!=null
-                    && ("BKC".equals(record.fromAsset) || "BKC".equals(record.toAsset) || record.isLiquidity());
-            if (target.equals(recordContract) || target.equals(ChainAddressUtil.normalizeAddress(record.toContractAddress)) || nativeLeg) {
+            if (AssetRecordFilter.matches(record,target,defaultContract)) {
                 result.add(record);
             }
         }
