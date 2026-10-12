@@ -29,12 +29,9 @@ import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /** Assets → Trade adapter. The homepage's original Swap screen remains independent. */
 public class BrokerSwapActivity extends AppCompatActivity {
-    private static final ExecutorService READS = Executors.newFixedThreadPool(2);
     private final Handler main = new Handler(Looper.getMainLooper());
     private BrokerSwapConfig config;
     private BrokerSwapClient client;
@@ -43,15 +40,17 @@ public class BrokerSwapActivity extends AppCompatActivity {
     private SwapPoolSnapshot pool;
     private BigInteger nativeBalance, payBalance, receiveBalance, allowance, gasReserve;
     private long readAt, validatedAt;
-    private boolean loading, confirming, preparing, resumed;
-    private int generation, slippage = 50;
+    private boolean loading, confirming;
+    private volatile boolean resumed, preparing;
+    private volatile int generation;
+    private int slippage = 50, readProgress;
     private EditText amount;
     private TextView receive, status, details, paySymbol, receiveSymbol, payBalanceView, receiveBalanceView;
     private Button submit, slipButton;
     private SwipeRefreshLayout refresh;
     private LiquidityPanelController liquidity;
     private TradeHistory swapHistory;
-    private boolean liquidityVisible;
+    private volatile boolean liquidityVisible;
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (!resumed) return;
@@ -131,10 +130,12 @@ public class BrokerSwapActivity extends AppCompatActivity {
         liquidity.onResume(wallet);
         fetch(); resumePending(); main.removeCallbacks(tick); main.postDelayed(tick, 15000);
     }
-    @Override protected void onPause() { resumed = false; main.removeCallbacks(tick); if(liquidity!=null)liquidity.onPause(); super.onPause(); }
-    @Override protected void onDestroy() { main.removeCallbacks(tick); if(liquidity!=null)liquidity.onDestroy(); super.onDestroy(); }
+    @Override protected void onPause() { resumed = false; generation++; main.removeCallbacks(tick); if(liquidity!=null)liquidity.onPause(); super.onPause(); }
+    @Override protected void onDestroy() { resumed=false; generation++; main.removeCallbacks(tick); if(liquidity!=null)liquidity.onDestroy(); super.onDestroy(); }
     private void setLiquidity(boolean value) {
         if(locked())return;
+        if(value==liquidityVisible)return;
+        generation++; // Stop subsequent reads for the page that is being hidden.
         liquidityVisible=value;
         findViewById(R.id.trade_swap_content).setVisibility(value?View.GONE:View.VISIBLE);
         findViewById(R.id.trade_liquidity_content).setVisibility(value?View.VISIBLE:View.GONE);
@@ -181,62 +182,72 @@ public class BrokerSwapActivity extends AppCompatActivity {
         }).show();
     }
     private void fetch() {
-        if(liquidityVisible)return;
+        if(!resumed || liquidityVisible)return;
         if (config == null || wallet.isEmpty() || preparing || confirming) { refresh.setRefreshing(false); render(); return; }
         if (loading) return;
-        loading = true; error = ""; render();
+        loading = true; readProgress=0; error = ""; render();
         final int id = generation; final String address = wallet;
         final SwapAsset pay = from, out = to;
         final boolean needsProtocol = pay == SwapAsset.SWAP_WBKC || out == SwapAsset.SWAP_WBKC || pay == SwapAsset.MUSDT || out == SwapAsset.MUSDT;
         final boolean validate = needsProtocol && (validatedAt == 0 || SystemClock.elapsedRealtime()-validatedAt > 600000);
-        READS.execute(() -> {
+        TradeReadSession session=new TradeReadSession(
+                () -> resumed && !liquidityVisible && !preparing && id==generation && sameAccount(address),
+                number -> main.post(() -> {
+                    if(resumed && !liquidityVisible && id==generation && sameAccount(address)) {
+                        readProgress=number; render();
+                    }
+                }));
+        BrokerSwapClient readClient=new BrokerSwapClient(config,session);
+        TradeReadQueue.execute(() -> {
             String stage = "账户";
             try {
+                session.check();
                 String key = TokenWalletHelper.getCurrentPrivateKey(getApplicationContext());
                 if (!sameAccount(address)) throw new IllegalStateException("账户已切换");
                 if (validate) {
                     stage = "合约校验";
-                    client.validate(key);
+                    readClient.validate(key);
                     final long checkedAt = SystemClock.elapsedRealtime();
                     main.post(() -> {
                         // Metadata/code validation succeeded independently of later volatile reads.
                         // A failed reserve/balance read must not restart all eight immutable checks.
-                        if (!isDestroyed() && id == generation && sameAccount(address)) {
+                        if (!isDestroyed() && resumed && !liquidityVisible && id == generation && sameAccount(address)) {
                             validatedAt = checkedAt;
                             importProtocolTokens();
                         }
                     });
                 }
                 stage = "BKC 余额";
-                BigInteger nativeAmount = client.balance(key, address, "");
+                BigInteger nativeAmount = readClient.balance(key, address, "");
                 stage = "支付资产余额";
-                BigInteger payAmount = pay == SwapAsset.BKC ? nativeAmount : client.balance(key, address, contract(pay));
+                BigInteger payAmount = pay == SwapAsset.BKC ? nativeAmount : readClient.balance(key, address, contract(pay));
                 stage = "到账资产余额";
-                BigInteger receiveAmount = out == SwapAsset.BKC ? nativeAmount : client.balance(key, address, contract(out));
+                BigInteger receiveAmount = out == SwapAsset.BKC ? nativeAmount : readClient.balance(key, address, contract(out));
                 stage = "手续费";
-                BigInteger gas = client.gasReserve();
+                BigInteger gas = readClient.gasReserve();
                 stage = "授权额度";
                 BigInteger approved = SwapAsset.isAmm(pay, out) && pay != SwapAsset.BKC
-                        ? client.allowance(key, address, contract(pay)) : BigInteger.ZERO;
+                        ? readClient.allowance(key, address, contract(pay)) : BigInteger.ZERO;
                 // Pool calls on Dash may wait for execution. Capture the quote LAST so balance/allowance
                 // reads cannot consume its 45-second validity before it reaches the screen.
                 stage = "资金池";
-                SwapPoolSnapshot snapshot = SwapAsset.isAmm(pay, out) ? client.pool(key) : null;
+                SwapPoolSnapshot snapshot = SwapAsset.isAmm(pay, out) ? readClient.pool(key) : null;
                 main.post(() -> {
-                    loading = false; refresh.setRefreshing(false);
+                    loading = false; if(!liquidityVisible)refresh.setRefreshing(false);
                     if (isDestroyed()) return;
-                    if (id != generation || !sameAccount(address)) { fetch(); return; }
+                    if (!resumed || liquidityVisible || id != generation || !sameAccount(address)) { fetch(); return; }
                     pool = snapshot; nativeBalance = nativeAmount; payBalance = payAmount; receiveBalance = receiveAmount;
                     gasReserve = gas; allowance = approved; readAt = SystemClock.elapsedRealtime(); error = "";
                     render();
                 });
             } catch (Exception e) {
-                final String failedStage = stage;
+                final String failedStage = stage, reason=TradeReadFailure.describe(e);
+                final boolean cancelled=e instanceof TradeReadSession.Cancelled;
                 main.post(() -> {
-                    loading = false; refresh.setRefreshing(false);
+                    loading = false; if(!liquidityVisible)refresh.setRefreshing(false);
                     if (isDestroyed()) return;
-                    if (id != generation) { fetch(); return; }
-                    clearRead(); error = failedStage + "读取失败，已停止自动重试。下拉刷新后再试；不会使用旧报价发交易。"; render();
+                    if(cancelled || !resumed || liquidityVisible || id!=generation || !sameAccount(address)) { fetch(); return; }
+                    clearRead(); error = failedStage + "："+reason+"。请下拉刷新；不会使用旧报价交易。"; render();
                 });
             }
         });
@@ -250,6 +261,9 @@ public class BrokerSwapActivity extends AppCompatActivity {
         }
     }
     private boolean needsApproval(BigInteger input) { return amm() && from != SwapAsset.BKC && (allowance == null || allowance.compareTo(input)<0); }
+    private String loadingText() {
+        return readProgress==0?"查询排队中…": "正在查询链上数据（第 "+readProgress+" 项，首次可能需数分钟）…";
+    }
     private BigInteger requiredGas() {
         if (gasReserve == null) return BigInteger.ZERO;
         return amm() && from != SwapAsset.BKC ? gasReserve.multiply(BigInteger.valueOf(2)) : gasReserve;
@@ -282,8 +296,8 @@ public class BrokerSwapActivity extends AppCompatActivity {
         TokenTxRecord pending=unresolved();
         status.setText("mUSDT 是测试资产，两种 wBKC 不可混用。\n" + (wallet.isEmpty() ? "请先登录钱包" : preparing ? "发送前重新检查…"
                 : SwapOperationRunner.active(wallet) ? "交易处理中，请勿重复操作" : pending!=null ? "有未确认交易，点击此处核查（不重发）"
-                : loading ? "正在读取链上数据…" : error.isEmpty() ? "网络 1051" : error)
-                +(pending!=null ? loading?"\n正在读取链上数据…":!error.isEmpty()?"\n"+error:"":""));
+                : loading ? loadingText() : error.isEmpty() ? "网络 1051" : error)
+                +(pending!=null ? loading?"\n"+loadingText():!error.isEmpty()?"\n"+error:"":""));
         status.setTextColor(pending!=null || !error.isEmpty()?0xff991B1B:0xff475569);
         status.setOnClickListener(v -> { TokenTxRecord r=unresolved(); if(r!=null)TradeHistory.showRecord(this,config,wallet,r,() -> { render(); fetch(); }); });
         if(swapHistory!=null)swapHistory.bind(config,wallet,() -> { render(); fetch(); });
@@ -345,7 +359,7 @@ public class BrokerSwapActivity extends AppCompatActivity {
     }
     private void prepare(int id, String address, SwapAsset pay, SwapAsset out, BigInteger input, SwapQuoteMath.Quote confirmed, boolean approval) {
         preparing = true; render();
-        READS.execute(() -> {
+        TradeReadQueue.execute(() -> {
             String stage = "账户状态";
             try {
                 if (id!=generation || !sameAccount(address)) throw new IllegalStateException("账户或资产已改变，请重新确认");

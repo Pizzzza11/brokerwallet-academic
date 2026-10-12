@@ -31,24 +31,43 @@ public final class BrokerSwapClient {
     private final OkHttpClient http = new OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS).callTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false).build();
+    // Dash signed reads often wait for chain execution. Writes keep the original bounds/retry policy.
+    static final int SIGNED_READ_TIMEOUT_SECONDS = 45, SIGNED_READ_CALL_TIMEOUT_SECONDS = 60;
+    private final OkHttpClient signedReads = http.newBuilder()
+            .readTimeout(SIGNED_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .callTimeout(SIGNED_READ_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS).build();
     private final BrokerSwapConfig cfg;
-    public BrokerSwapClient(BrokerSwapConfig config) { cfg = config; }
+    private final TradeReadSession session;
+    public BrokerSwapClient(BrokerSwapConfig config) { this(config,null); }
+    BrokerSwapClient(BrokerSwapConfig config, TradeReadSession session) { cfg=config; this.session=session; }
     BrokerSwapConfig deployment() { return cfg; }
     private String post(String url, Object body) throws IOException {
+        return post(url,body,http,false);
+    }
+    private String post(String url, Object body, OkHttpClient transport, boolean readOnly) throws IOException {
+        if(readOnly && session!=null)session.starting();
         Request request = new Request.Builder().url(url).post(RequestBody.create(
                 MediaType.parse("application/json; charset=utf-8"), GSON.toJson(body))).build();
-        try (Response response = http.newCall(request).execute()) {
-            if (!response.isSuccessful() || response.body() == null) throw new IOException("Chain connection failed");
-            return response.body().string();
+        try (Response response = transport.newCall(request).execute()) {
+            if (!response.isSuccessful()) throw new TradeReadFailure(TradeReadFailure.Kind.HTTP);
+            if (response.body() == null) throw new TradeReadFailure(TradeReadFailure.Kind.INVALID);
+            String raw=response.body().string();
+            if(readOnly && session!=null)session.check();
+            return raw;
         }
     }
     private String result(String raw) throws IOException {
         try {
             JsonObject object = JsonParser.parseString(raw).getAsJsonObject();
-            if (object.has("error") || !object.has("result") || object.get("result").isJsonNull())
-                throw new IOException("Chain query rejected");
+            if (object.has("error")) {
+                boolean unknownAccount=object.get("error").isJsonPrimitive()
+                        && "addr not exist".equals(object.get("error").getAsString());
+                throw new TradeReadFailure(unknownAccount?TradeReadFailure.Kind.ACCOUNT:TradeReadFailure.Kind.REJECTED);
+            }
+            if (!object.has("result") || object.get("result").isJsonNull())
+                throw new TradeReadFailure(TradeReadFailure.Kind.INVALID);
             return object.get("result").getAsString();
-        } catch (RuntimeException e) { throw new IOException("Invalid chain response"); }
+        } catch (RuntimeException e) { throw new TradeReadFailure(TradeReadFailure.Kind.INVALID); }
     }
     public String rpc(String method, Object... params) throws IOException {
         if (!isReadOnlyRpcMethod(method)) throw new IllegalArgumentException("Unsupported read RPC");
@@ -56,7 +75,8 @@ public final class BrokerSwapClient {
         body.put("jsonrpc", "2.0"); body.put("id", 1); body.put("method", method); body.put("params", Arrays.asList(params));
         IOException failure = null;
         for (int attempt = 0; attempt < 2; attempt++) {
-            try { return result(post(ChainConfig.CHAIN_JSON_RPC_URL, body)); }
+            try { return result(post(ChainConfig.CHAIN_JSON_RPC_URL, body, http, true)); }
+            catch (TradeReadSession.Cancelled e) { throw e; }
             catch (IOException e) { failure = e; }
         }
         throw failure;
@@ -64,13 +84,15 @@ public final class BrokerSwapClient {
     public String read(String key, String contract, String data) throws Exception {
         IOException failure = null;
         for (int attempt = 0; attempt < 2; attempt++) {
+        if(session!=null)session.check();
         String uuid = UUID.randomUUID().toString();
         String[] signature = SecurityUtil.signECDSA(key, contract + data + "0x0" + uuid);
         CallReq request = new CallReq();
         request.setPublicKey(SecurityUtil.getPublicKeyFromPrivateKey(key)); request.setRandomStr(uuid);
         request.setTo(contract); request.setData(data); request.setValue("0x0");
         request.setSign1(signature[0]); request.setSign2(signature[1]);
-        try { return requireReadHex(result(post(ChainConfig.getDashGatewayPostUrl("eth_call"), request))); }
+        try { return requireReadHex(result(post(ChainConfig.getDashGatewayPostUrl("eth_call"), request, signedReads, true))); }
+        catch (TradeReadSession.Cancelled e) { throw e; }
         catch (IOException e) { failure = e; }
         }
         throw failure;
@@ -81,7 +103,7 @@ public final class BrokerSwapClient {
     }
     static String requireReadHex(String value) throws IOException {
         if (value == null || !value.matches("0x([0-9a-fA-F]{64})+"))
-            throw new IOException("Empty or incomplete chain read");
+            throw new TradeReadFailure(TradeReadFailure.Kind.INVALID);
         return value;
     }
     public void validate(String key) throws Exception {
@@ -98,13 +120,18 @@ public final class BrokerSwapClient {
         boolean musdt0 = cfg.musdt().compareTo(cfg.wbkc()) < 0;
         checkAddress(key, cfg.pair(), "token0", musdt0 ? cfg.musdt() : cfg.wbkc());
         checkAddress(key, cfg.pair(), "token1", musdt0 ? cfg.wbkc() : cfg.musdt());
-        if (!BrokerSwapAbi.words(read(key, cfg.musdt(), BrokerSwapAbi.call("decimals")), 1)[0].equals(BigInteger.valueOf(6))
-                || !BrokerSwapAbi.words(read(key, cfg.wbkc(), BrokerSwapAbi.call("decimals")), 1)[0].equals(BigInteger.valueOf(18)))
+        if (!BrokerSwapAbi.words(metadataRead(key, cfg.musdt(), "decimals"), 1)[0].equals(BigInteger.valueOf(6))
+                || !BrokerSwapAbi.words(metadataRead(key, cfg.wbkc(), "decimals"), 1)[0].equals(BigInteger.valueOf(18)))
             throw new IOException("Swap token decimals do not match");
     }
     private void checkAddress(String key, String contract, String getter, String expected) throws Exception {
-        if (!expected.equalsIgnoreCase(BrokerSwapAbi.address(read(key, contract, BrokerSwapAbi.call(getter)))))
+        if (!expected.equalsIgnoreCase(BrokerSwapAbi.address(metadataRead(key, contract, getter))))
             throw new IOException("Swap " + getter + " does not match");
+    }
+    private String metadataRead(String key,String contract,String getter) throws Exception {
+        try { return read(key,contract,BrokerSwapAbi.call(getter)); }
+        catch(TradeReadSession.Cancelled e) { throw e; }
+        catch(IOException e) { throw new TradeReadFailure.Query(getter,e); }
     }
     /** Independently validates the atomic liquidity router; never uses the old full router. */
     public void validateLiquidity(String key) throws Exception {
@@ -122,7 +149,7 @@ public final class BrokerSwapClient {
         checkAddress(key, cfg.pair(), "token0", musdt0 ? cfg.musdt() : cfg.wbkc());
         checkAddress(key, cfg.pair(), "token1", musdt0 ? cfg.wbkc() : cfg.musdt());
         for (String token : new String[]{cfg.musdt(), cfg.wbkc(), cfg.pair()})
-            if (!BrokerSwapAbi.words(read(key, token, BrokerSwapAbi.call("decimals")), 1)[0]
+            if (!BrokerSwapAbi.words(metadataRead(key, token, "decimals"), 1)[0]
                     .equals(BigInteger.valueOf(token.equals(cfg.musdt()) ? 6 : 18)))
                 throw new IOException("Liquidity token decimals do not match");
     }

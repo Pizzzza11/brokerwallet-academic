@@ -25,13 +25,10 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /** Wallet UI adapter for Du's existing atomic LP router. Does not deploy or alter contracts. */
 final class LiquidityPanelController {
     interface Busy { boolean get(); }
-    private static final ExecutorService READS=Executors.newFixedThreadPool(2);
     private final AppCompatActivity activity;
     private final BrokerSwapConfig config;
     private final BrokerSwapClient client;
@@ -46,8 +43,10 @@ final class LiquidityPanelController {
     private String wallet="",error="";
     private Snapshot snapshot;
     private long validatedAt;
-    private int generation,percent;
-    private boolean visible,resumed,loading,confirming,preparing,updating,lastEditedBkc=true;
+    private volatile int generation;
+    private int percent,readProgress;
+    private volatile boolean visible,resumed,preparing;
+    private boolean loading,confirming,updating,lastEditedBkc=true;
     private final Runnable tick=new Runnable() { public void run() {
         if(!resumed) return;
         if(visible) { render(); if(!loading && !busy() && error.isEmpty() && !SwapOperationRunner.active(wallet))fetch(); }
@@ -105,7 +104,7 @@ final class LiquidityPanelController {
     }
     boolean busy() { return confirming || preparing; }
     private boolean locked() { return busy() || otherBusy.get() || SwapOperationRunner.active(wallet); }
-    void setVisible(boolean value) { visible=value; if(value) { render(); fetch(); } }
+    void setVisible(boolean value) { if(value!=visible)generation++; visible=value; if(value) { render(); fetch(); } }
     void onResume(String account) {
         if(!wallet.equalsIgnoreCase(account)) {
             wallet=account; generation++; validatedAt=0; snapshot=null; error="";
@@ -114,42 +113,53 @@ final class LiquidityPanelController {
         resumed=true; main.removeCallbacks(tick); main.postDelayed(tick,15000);
         if(visible)fetch(); render();
     }
-    void onPause() { resumed=false; main.removeCallbacks(tick); }
-    void onDestroy() { generation++; main.removeCallbacks(tick); }
+    void onPause() { resumed=false; generation++; main.removeCallbacks(tick); }
+    void onDestroy() { resumed=false; generation++; main.removeCallbacks(tick); }
     private boolean sameAccount(String address) { return address.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(activity))); }
     private TokenTxRecord unresolved() {
         for(TokenTxRecord record:TokenTxHistoryStore.getAll(activity,wallet))if(TokenTxHistoryStore.isUnresolvedSwap(record))return record;
         return null;
     }
     void fetch() {
-        if(!visible || loading || busy() || config==null || !config.hasLiquidity() || wallet.isEmpty()) { parentChanged.run(); return; }
-        loading=true; error=""; render();
+        if(!resumed || !visible || loading || busy() || config==null || !config.hasLiquidity() || wallet.isEmpty()) { parentChanged.run(); return; }
+        loading=true; readProgress=0; error=""; render();
         final int id=generation; final String account=wallet;
         final boolean validate=validatedAt==0 || SystemClock.elapsedRealtime()-validatedAt>600000;
-        READS.execute(() -> {
+        TradeReadSession session=new TradeReadSession(
+                () -> resumed && visible && !preparing && id==generation && sameAccount(account),
+                number -> main.post(() -> {
+                    if(resumed && visible && id==generation && sameAccount(account)) {
+                        readProgress=number; render(); parentChanged.run();
+                    }
+                }));
+        BrokerSwapClient readClient=new BrokerSwapClient(config,session);
+        TradeReadQueue.execute(() -> {
             String stage="账户";
             try {
+                session.check();
                 if(!sameAccount(account))throw new IllegalStateException("Account changed");
                 String key=TokenWalletHelper.getCurrentPrivateKey(activity.getApplicationContext());
                 if(validate) {
-                    stage="流动性合约校验"; client.validateLiquidity(key);
+                    stage="流动性合约校验"; readClient.validateLiquidity(key);
                     long checked=SystemClock.elapsedRealtime();
-                    main.post(() -> { if(!activity.isDestroyed() && id==generation && sameAccount(account))validatedAt=checked; });
+                    main.post(() -> { if(!activity.isDestroyed() && resumed && visible && id==generation && sameAccount(account))validatedAt=checked; });
                 }
                 stage="余额、LP 和授权额度";
-                Snapshot read=readSnapshot(key,account);
+                Snapshot read=readSnapshot(readClient,key,account);
                 main.post(() -> {
                     loading=false;
                     if(activity.isDestroyed())return;
-                    if(id!=generation || !sameAccount(account)) { parentChanged.run(); return; }
+                    if(!resumed || !visible || id!=generation || !sameAccount(account)) { fetch(); return; }
                     snapshot=read; error=""; matchOther(); render(); parentChanged.run();
                 });
             } catch(Exception e) {
-                final String failed=stage;
+                final String failed=stage, reason=TradeReadFailure.describe(e);
+                final boolean cancelled=e instanceof TradeReadSession.Cancelled;
                 main.post(() -> {
                     loading=false;
                     if(activity.isDestroyed())return;
-                    if(id==generation && sameAccount(account)) { snapshot=null; error=failed+"读取失败，请下拉刷新；不会使用旧报价交易。"; render(); }
+                    if(cancelled || !resumed || !visible || id!=generation || !sameAccount(account)) { fetch(); return; }
+                    snapshot=null; error=failed+"："+reason+"。请下拉刷新；不会使用旧报价交易。"; render();
                     parentChanged.run();
                 });
             }
@@ -157,6 +167,9 @@ final class LiquidityPanelController {
     }
     boolean loading() { return loading; }
     private Snapshot readSnapshot(String key,String address) throws Exception {
+        return readSnapshot(client,key,address);
+    }
+    private Snapshot readSnapshot(BrokerSwapClient client,String key,String address) throws Exception {
         BigInteger n=client.balance(key,address,""), m=client.balance(key,address,config.musdt());
         BigInteger lp=client.balance(key,address,config.pair()), supply=client.totalSupply(key);
         BigInteger ma=client.allowance(key,address,config.musdt(),config.liquidityRouter());
@@ -192,8 +205,8 @@ final class LiquidityPanelController {
         Snapshot s=snapshot; boolean lock=locked(); TokenTxRecord pending=unresolved();
         String state=pending!=null?"有未确认交易："+SwapRecordPresentation.status(pending.status)+"（点击核查，不重发）"
                 : busy()?"发送前重新检查…":SwapOperationRunner.active(wallet)?"交易处理中，请勿重复操作"
-                : loading?"正在查询链上数据…":!error.isEmpty()?error:s==null?"下拉刷新读取链上持仓":"网络 1051 · 允许到账浮动 0.5%";
-        status.setText("mUSDT 是测试资产。\n"+state+(pending!=null?loading?"\n正在查询链上数据…":!error.isEmpty()?"\n"+error:"":"")); status.setTextColor(pending!=null || !error.isEmpty()?0xff991B1B:0xff475569);
+                : loading?loadingText():!error.isEmpty()?error:s==null?"下拉刷新读取链上持仓":"网络 1051 · 允许到账浮动 0.5%";
+        status.setText("mUSDT 是测试资产。\n"+state+(pending!=null?loading?"\n"+loadingText():!error.isEmpty()?"\n"+error:"":"")); status.setTextColor(pending!=null || !error.isEmpty()?0xff991B1B:0xff475569);
         bkc.setEnabled(!lock); musdt.setEnabled(!lock); slider.setEnabled(!lock);
         for(int id:new int[]{R.id.lp_percent_25,R.id.lp_percent_50,R.id.lp_percent_75,R.id.lp_percent_100})activity.findViewById(id).setEnabled(!lock);
         balanceBkc.setText("余额："+(s==null?"—":TradeDisplay.amount(s.nativeBalance,18))+" BKC");
@@ -284,7 +297,7 @@ final class LiquidityPanelController {
     private void prepare(int id,String account,String action,BigInteger desiredM,BigInteger desiredB,BigInteger lp,
                          BigInteger minM,BigInteger minB,BigInteger minLp,BigInteger estimatedLp) {
         preparing=true; render(); parentChanged.run();
-        READS.execute(() -> {
+        TradeReadQueue.execute(() -> {
             try {
                 if(id!=generation || !sameAccount(account))throw new IllegalStateException("Account changed");
                 String key=TokenWalletHelper.getCurrentPrivateKey(activity.getApplicationContext());
@@ -341,5 +354,8 @@ final class LiquidityPanelController {
     }
     void changed() { if(visible) { snapshot=null; fetch(); render(); } }
     private void afterHistory() { render(); if(!SwapOperationRunner.active(wallet))fetch(); parentChanged.run(); }
+    private String loadingText() {
+        return readProgress==0?"查询排队中…":"正在查询链上数据（第 "+readProgress+" 项，首次可能需数分钟）…";
+    }
     private void toast(String message) { Toast.makeText(activity,message,Toast.LENGTH_LONG).show(); }
 }
