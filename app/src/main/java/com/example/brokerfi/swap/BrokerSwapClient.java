@@ -31,11 +31,17 @@ public final class BrokerSwapClient {
     private final OkHttpClient http = new OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS).callTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(false).build();
-    // Dash signed reads often wait for chain execution. Writes keep the original bounds/retry policy.
-    static final int SIGNED_READ_TIMEOUT_SECONDS = 45, SIGNED_READ_CALL_TIMEOUT_SECONDS = 60;
+    // Signed Dash operations may take several minutes; public RPC retains its original bounds.
+    static final int DASH_OPERATION_TIMEOUT_SECONDS = 330;
+    static final int SIGNED_READ_TIMEOUT_SECONDS = DASH_OPERATION_TIMEOUT_SECONDS,
+            SIGNED_READ_CALL_TIMEOUT_SECONDS = DASH_OPERATION_TIMEOUT_SECONDS;
     private final OkHttpClient signedReads = http.newBuilder()
             .readTimeout(SIGNED_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .callTimeout(SIGNED_READ_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS).build();
+    private final OkHttpClient transactions=http.newBuilder()
+            .readTimeout(DASH_OPERATION_TIMEOUT_SECONDS,TimeUnit.SECONDS)
+            .callTimeout(DASH_OPERATION_TIMEOUT_SECONDS,TimeUnit.SECONDS)
+            .retryOnConnectionFailure(false).build();
     private final BrokerSwapConfig cfg;
     private final TradeReadSession session;
     public BrokerSwapClient(BrokerSwapConfig config) { this(config,null); }
@@ -191,7 +197,7 @@ public final class BrokerSwapClient {
         request.setSign1(signature[0]); request.setSign2(signature[1]);
         RequestBody body=RequestBody.create(MediaType.parse("application/json; charset=utf-8"),GSON.toJson(request));
         diagnostics.stage("REQUEST_READY");
-        return diagnostics.post(http,ChainConfig.getDashGatewayPostUrl("eth_sendTransaction"),body);
+        return diagnostics.post(transactions,ChainConfig.getDashGatewayPostUrl("eth_sendTransaction"),body);
     }
     public SwapReceipt receipt(String key, String hash, SwapAsset from, SwapAsset to, BigInteger input, String wallet) throws Exception {
         return SwapReceipt.parse(receiptRaw(key, hash), hash, cfg, from, to, input, wallet);
@@ -203,6 +209,6 @@ public final class BrokerSwapClient {
         Map<String, Object> request = new LinkedHashMap<>();
         request.put("uuid", bodyHash); request.put("PublicKey", SecurityUtil.getPublicKeyFromPrivateKey(key));
         request.put("RandomStr", uuid); request.put("Sign1", sig[0]); request.put("Sign2", sig[1]);
-        return post(ChainConfig.getDashGatewayPostUrl("eth_getTransactionReceipt"), request);
+        return post(ChainConfig.getDashGatewayPostUrl("eth_getTransactionReceipt"), request,transactions,false);
     }
 }

@@ -22,17 +22,21 @@ public class TradeReadFailureTest {
         assertEquals("查询账户未被网关识别",TradeReadFailure.describe(new TradeReadFailure(TradeReadFailure.Kind.ACCOUNT)));
         assertEquals("链上返回数据不完整",TradeReadFailure.describe(new TradeReadFailure(TradeReadFailure.Kind.INVALID)));
     }
-    @Test public void longerWaitIsBoundedAndRestrictedToSignedReads() {
-        assertEquals(45,BrokerSwapClient.SIGNED_READ_TIMEOUT_SECONDS);
-        assertEquals(60,BrokerSwapClient.SIGNED_READ_CALL_TIMEOUT_SECONDS);
+    @Test public void slowDashWaitIsBounded() {
+        assertEquals(330,BrokerSwapClient.SIGNED_READ_TIMEOUT_SECONDS);
+        assertEquals(330,BrokerSwapClient.SIGNED_READ_CALL_TIMEOUT_SECONDS);
     }
-    @Test public void transactionTransportRetainsOriginalBoundsAndDoesNotAutomaticallyRetry() throws Exception {
+    @Test public void publicRpcKeepsOriginalBoundsAndTransactionsWaitWithoutRetries() throws Exception {
         BrokerSwapClient client=new BrokerSwapClient(null);
         java.lang.reflect.Field writes=BrokerSwapClient.class.getDeclaredField("http");writes.setAccessible(true);
         java.lang.reflect.Field reads=BrokerSwapClient.class.getDeclaredField("signedReads");reads.setAccessible(true);
+        java.lang.reflect.Field operations=BrokerSwapClient.class.getDeclaredField("transactions");operations.setAccessible(true);
         okhttp3.OkHttpClient original=(okhttp3.OkHttpClient)writes.get(client), signed=(okhttp3.OkHttpClient)reads.get(client);
+        okhttp3.OkHttpClient transaction=(okhttp3.OkHttpClient)operations.get(client);
         assertEquals(25000,original.readTimeoutMillis());assertEquals(30000,original.callTimeoutMillis());
         assertFalse(original.retryOnConnectionFailure());assertFalse(signed.retryOnConnectionFailure());
-        assertEquals(45000,signed.readTimeoutMillis());assertEquals(60000,signed.callTimeoutMillis());
+        assertEquals(330000,signed.readTimeoutMillis());assertEquals(330000,signed.callTimeoutMillis());
+        assertEquals(330000,transaction.readTimeoutMillis());assertEquals(330000,transaction.callTimeoutMillis());
+        assertFalse(transaction.retryOnConnectionFailure());
     }
 }

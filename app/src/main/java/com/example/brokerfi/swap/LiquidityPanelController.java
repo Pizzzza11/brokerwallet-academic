@@ -82,7 +82,7 @@ final class LiquidityPanelController {
         for(int i=0;i<ids.length;i++) { final int value=(i+1)*25; activity.findViewById(ids[i]).setOnClickListener(v -> { if(!locked())slider.setProgress(value); }); }
         approveAdd.setOnClickListener(v -> confirm(true,true)); add.setOnClickListener(v -> confirm(true,false));
         approveRemove.setOnClickListener(v -> confirm(false,true)); remove.setOnClickListener(v -> confirm(false,false));
-        status.setOnClickListener(v -> { TokenTxRecord pending=unresolved(); if(pending!=null)TradeHistory.showRecord(activity,config,wallet,pending,this::afterHistory); });
+        status.setOnClickListener(v -> { TokenTxRecord pending=unresolved(); if(pending==null)pending=deferred(); if(pending!=null)TradeHistory.showRecord(activity,config,wallet,pending,this::afterHistory); });
         render();
     }
     private TextWatcher watcher(boolean fromBkc) { return new TextWatcher() {
@@ -117,7 +117,11 @@ final class LiquidityPanelController {
     void onDestroy() { resumed=false; generation++; main.removeCallbacks(tick); }
     private boolean sameAccount(String address) { return address.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(activity))); }
     private TokenTxRecord unresolved() {
-        for(TokenTxRecord record:TokenTxHistoryStore.getAll(activity,wallet))if(TokenTxHistoryStore.isUnresolvedSwap(record))return record;
+        for(TokenTxRecord record:TokenTxHistoryStore.getAll(activity,wallet))if(TokenTxHistoryStore.isBlockingSwap(record))return record;
+        return null;
+    }
+    private TokenTxRecord deferred() {
+        for(TokenTxRecord r:TokenTxHistoryStore.getAll(activity,wallet))if(TradeRecoveryPolicy.deferred(r))return r;
         return null;
     }
     void fetch() {
@@ -206,7 +210,8 @@ final class LiquidityPanelController {
         String state=pending!=null?"有未确认交易："+SwapRecordPresentation.status(pending.status)+"（点击核查，不重发）"
                 : busy()?"发送前重新检查…":SwapOperationRunner.active(wallet)?"交易处理中，请勿重复操作"
                 : loading?loadingText():!error.isEmpty()?error:s==null?"下拉刷新读取链上持仓":"网络 1051 · 允许到账浮动 0.5%";
-        status.setText("mUSDT 是测试资产。\n"+state+(pending!=null?loading?"\n"+loadingText():!error.isEmpty()?"\n"+error:"":"")); status.setTextColor(pending!=null || !error.isEmpty()?0xff991B1B:0xff475569);
+        status.setText("mUSDT 是测试资产。\n"+state+(pending!=null?loading?"\n"+loadingText():!error.isEmpty()?"\n"+error:"":"")
+                +(deferred()!=null?"\n旧记录仍待核查，已接受风险继续（点击查看）":"")); status.setTextColor(pending!=null || !error.isEmpty()?0xff991B1B:0xff475569);
         bkc.setEnabled(!lock); musdt.setEnabled(!lock); slider.setEnabled(!lock);
         for(int id:new int[]{R.id.lp_percent_25,R.id.lp_percent_50,R.id.lp_percent_75,R.id.lp_percent_100})activity.findViewById(id).setEnabled(!lock);
         balanceBkc.setText("余额："+(s==null?"—":TradeDisplay.amount(s.nativeBalance,18))+" BKC");
@@ -324,6 +329,7 @@ final class LiquidityPanelController {
                 BigInteger value=!approval && adding?desiredB:BigInteger.ZERO;
                 TokenTxRecord record=new TokenTxRecord(); record.operationId=UUID.randomUUID().toString(); record.timestampMs=System.currentTimeMillis();
                 record.type=approval?"APPROVAL":"LIQUIDITY"; record.liquidityAction=action; record.routerAddress=config.liquidityRouter(); record.chainId=config.chainId();
+                record.deadlineSeconds=approval?0:deadline;
                 record.contractAddress=approval?target:config.pair(); record.inputUnits=amount.toString();
                 if(!approval)record.toContractAddress=config.musdt();
                 record.fromSymbol=approval?adding?"mUSDT":"LP":adding?"BKC + mUSDT":"LP"; record.toSymbol=adding?"LP":"BKC + mUSDT";

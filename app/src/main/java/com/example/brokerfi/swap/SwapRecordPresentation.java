@@ -17,7 +17,7 @@ public final class SwapRecordPresentation {
         }
     }
     public static String details(TokenTxRecord r) {
-        if (r.isLiquidity()) return liquidityDetails(r)+SwapSendDiagnostics.details(r);
+        if (r.isLiquidity()) return liquidityDetails(r)+SwapSendDiagnostics.details(r)+TradeRecoveryPolicy.details(r);
         boolean approval = "APPROVAL".equals(r.type);
         return status(r.status) + "\n" + (approval ? "授权限额：" : "支付：") + r.amountDisplay + " " + r.fromSymbol
                 + (approval ? "\n授权对象：" + r.routerAddress : "\n预计到账：" + r.estimatedOutput + " " + r.toSymbol
@@ -29,7 +29,7 @@ public final class SwapRecordPresentation {
                 + (approval ? "" : "\n到账资产合约：" + (r.toContractAddress == null || r.toContractAddress.isEmpty() ? "原生 BKC" : r.toContractAddress))
                 + "\n手续费：" + (r.gasCost == null ? "待核实" : r.gasCost + " BKC")
                 + "\n交易编号：" + (r.txHash == null ? "尚未取得，请先核查链上结果" : r.txHash)
-                + SwapSendDiagnostics.details(r);
+                + SwapSendDiagnostics.details(r)+TradeRecoveryPolicy.details(r);
     }
     public static String label(TokenTxRecord r) {
         if (r.isLiquidity()) return r.liquidityAction.startsWith("APPROVE") ? "流动性授权" : "ADD".equals(r.liquidityAction) ? "添加流动性" : "撤出流动性";

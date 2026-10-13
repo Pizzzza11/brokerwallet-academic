@@ -103,6 +103,8 @@ final class SwapSendDiagnostics {
                 +(r.sendHttpStatus==null?"":"\nHTTP 状态："+r.sendHttpStatus)
                 +(r.sendRpcCode==null?"":"\n网关错误码："+r.sendRpcCode)
                 +(r.sendFailure==null?"":"\n发送错误类别："+safe(r.sendFailure))
+                +(r.deadlineSeconds<=0?"":"\n合约截止时间（Unix 秒）："+r.deadlineSeconds)
+                +(r.receiptAttempts<=0?"":"\n回执查询次数："+r.receiptAttempts)
                 +(r.receiptFailure==null?"":"\n回执查询："+safe(r.receiptFailure));
     }
     private static String stageLabel(String stage) {

@@ -33,7 +33,7 @@ public final class SwapOperationRunner {
             try {
                 if (!wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(app)))) throw new IllegalStateException("Account changed");
                 for (TokenTxRecord old : TokenTxHistoryStore.getAll(app, wallet))
-                    if (TokenTxHistoryStore.isUnresolvedSwap(old)) throw new IllegalStateException("Unresolved operation");
+                    if (TokenTxHistoryStore.isBlockingSwap(old)) throw new IllegalStateException("Unresolved operation");
                 record.status = "SUBMITTING";
                 record.sendRequestId=java.util.UUID.randomUUID().toString();
                 record.sendStartedMs=System.currentTimeMillis();
@@ -82,7 +82,11 @@ public final class SwapOperationRunner {
     }
     private static void poll(Context app, BrokerSwapClient client, String key, String wallet, TokenTxRecord record) throws Exception {
         record.receiptFailure=null;
-        for (int i = 0; i < 3; i++) {
+        long stopAt=android.os.SystemClock.elapsedRealtime()+15*60*1000;
+        for (int i = 0; i < 30; i++) {
+            if(i>0 && android.os.SystemClock.elapsedRealtime()>=stopAt)break;
+            record.receiptAttempts++;
+            record.receiptLastCheckedMs=System.currentTimeMillis();
             if (record.isLiquidity()) {
                 LiquidityReceipt receipt=LiquidityReceipt.parse(client.receiptRaw(key,record.txHash),client.deployment(),record,wallet);
                 record.status=receipt.status;
@@ -92,7 +96,7 @@ public final class SwapOperationRunner {
                 if (receipt.gasCost!=null) record.gasCost=SwapQuoteMath.format(receipt.gasCost,18);
                 saveReceipt(app,wallet,record);
                 if (!"PENDING".equals(record.status)) break;
-                if (i<2) Thread.sleep(2500);
+                if (i<29) Thread.sleep(2000);
                 continue;
             }
             SwapReceipt receipt = client.receipt(key, record.txHash, SwapAsset.valueOf(record.fromAsset),
@@ -103,7 +107,7 @@ public final class SwapOperationRunner {
             if (receipt.gasCost != null) record.gasCost = SwapQuoteMath.format(receipt.gasCost, 18);
             saveReceipt(app,wallet,record);
             if (!"PENDING".equals(record.status)) break;
-            if (i < 2) Thread.sleep(2500);
+            if (i < 29) Thread.sleep(2000);
         }
     }
     private static void saveReceipt(Context app,String wallet,TokenTxRecord record) throws java.io.IOException {

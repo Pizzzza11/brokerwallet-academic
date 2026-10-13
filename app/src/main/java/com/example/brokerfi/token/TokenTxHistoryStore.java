@@ -453,6 +453,11 @@ public final class TokenTxHistoryStore {
                 || "UNKNOWN".equals(record.status));
     }
 
+    /** Deferred UNKNOWN is still retained in history, but no longer permanently blocks Trade. */
+    public static boolean isBlockingSwap(TokenTxRecord record) {
+        return com.example.brokerfi.swap.TradeRecoveryPolicy.blocks(record);
+    }
+
     private static void trimCompleted(List<TokenTxRecord> list) {
         for (int i = list.size() - 1; list.size() > MAX_RECORDS && i >= 0; i--)
             if (!isUnresolvedSwap(list.get(i))) list.remove(i);

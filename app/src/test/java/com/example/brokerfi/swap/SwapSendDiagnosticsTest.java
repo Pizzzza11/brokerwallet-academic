@@ -36,6 +36,9 @@ public class SwapSendDiagnosticsTest {
         volatile Exception failure;
         final Thread worker;
         Gateway(int status,String response,boolean disconnect) throws IOException {
+            this(status,response,disconnect,0);
+        }
+        Gateway(int status,String response,boolean disconnect,long responseDelayMs) throws IOException {
             server.setSoTimeout(4000);
             worker=new Thread(() -> {
                 try(Socket socket=server.accept()) {
@@ -47,6 +50,7 @@ public class SwapSendDiagnosticsTest {
                     for(int i=0;i<length;i++)if(reader.read()<0)throw new IOException("Incomplete fake request");
                     requests.incrementAndGet();
                     if(disconnect)return;
+                    if(responseDelayMs>0)Thread.sleep(responseDelayMs);
                     byte[] bytes=response.getBytes(StandardCharsets.UTF_8);
                     String headers="HTTP/1.1 "+status+" Test\r\nContent-Length: "+bytes.length
                             +"\r\nConnection: close\r\nLocation: "+url()+"\r\n\r\n";
@@ -178,6 +182,19 @@ public class SwapSendDiagnosticsTest {
         assertEquals("SUCCESS",SwapSendDiagnostics.failureStatus(r));
         r.status="FAILED";
         assertEquals("FAILED",SwapSendDiagnostics.failureStatus(r));
+    }
+    @Test(timeout=50000) public void slowResponseBeyondOldThirtySecondsStillReturnsHashWithoutResend() throws Exception {
+        BrokerSwapClient client=new BrokerSwapClient(null);
+        java.lang.reflect.Field field=BrokerSwapClient.class.getDeclaredField("transactions");field.setAccessible(true);
+        OkHttpClient transport=(OkHttpClient)field.get(client);
+        TokenTxRecord r=record();SwapSendDiagnostics d=new SwapSendDiagnostics(r,() -> true);
+        long started=System.nanoTime();
+        try(Gateway gateway=new Gateway(200,"{\"result\":\""+HASH+"\"}",false,35000)) {
+            assertEquals(HASH,d.post(transport,gateway.url(),body()));
+            assertEquals(1,gateway.requests.get());
+        }
+        assertTrue(TimeUnit.NANOSECONDS.toSeconds(System.nanoTime()-started)>=35);
+        assertNull(r.sendFailure);assertEquals(Integer.valueOf(200),r.sendHttpStatus);
     }
     @Test public void oldRecordsAreNotRetroactivelyDiagnosedAndDisplayIsAllowlisted() {
         TokenTxRecord r=new TokenTxRecord();r.status="UNKNOWN";

@@ -69,13 +69,21 @@ final class TradeHistory {
             dialog.setPositiveButton("查询结果（不重发）",(d,w) -> {
                 SwapOperationRunner.resume(activity,config,wallet,r,record -> { if(!activity.isDestroyed())changed.run(); }); changed.run();
             });
-        else if(TokenTxHistoryStore.isUnresolvedSwap(r) && !SwapOperationRunner.active(wallet))
-            dialog.setPositiveButton("我已核查链上结果",(d,w) -> new AlertDialog.Builder(activity)
-                    .setTitle("解除锁定可能导致重复交易")
-                    .setMessage("没有交易编号不代表未发出。必须先核查链上记录、余额和授权。此操作只解除本机防重复锁，不会撤销或重发交易。确认已核实最终结果？")
-                    .setNegativeButton("保留锁定",null).setPositiveButton("已核实，解除锁定",(d2,w2) -> {
-                        r.status="ACKNOWLEDGED";
-                        if(!TokenTxHistoryStore.upsertSwap(activity,wallet,r))Toast.makeText(activity,"保存失败，仍需核查",Toast.LENGTH_LONG).show();
+        else if(TradeRecoveryPolicy.canAcceptRisk(r,SwapOperationRunner.active(wallet)) && !TradeRecoveryPolicy.deferred(r))
+            dialog.setPositiveButton("继续新交易…",(d,w) -> new AlertDialog.Builder(activity)
+                    .setTitle("保留未知记录，确认继续风险")
+                    .setMessage("旧请求没有交易编号，不代表未发出。它仍可能迟到执行，造成重复扣币或额外手续费。继续操作不会取消或重发旧请求，也不会将旧结果改成失败。若不接受风险，请保留锁定并继续核查。")
+                    .setNegativeButton("保留锁定",null).setPositiveButton("接受风险，允许新交易",(d2,w2) -> {
+                        if(!wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(com.example.brokerfi.token.TokenWalletHelper.getWalletAddress(activity)))) {
+                            Toast.makeText(activity,"账户已切换，未修改记录",Toast.LENGTH_LONG).show();return;
+                        }
+                        long previous=r.continuationRiskAcceptedMs;
+                        if(!TradeRecoveryPolicy.acceptRisk(r,SwapOperationRunner.active(wallet),System.currentTimeMillis()))return;
+                        if(!TokenTxHistoryStore.upsertSwap(activity,wallet,r)) {
+                            r.continuationRiskAcceptedMs=previous;
+                            TokenTxHistoryStore.upsertSwap(activity,wallet,r);
+                            Toast.makeText(activity,"保存失败，仍保留锁定",Toast.LENGTH_LONG).show();
+                        }
                         changed.run();
                     }).show());
         dialog.show();

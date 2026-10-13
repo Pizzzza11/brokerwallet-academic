@@ -49,6 +49,10 @@ public class TokenTxRecord implements Serializable {
     public Integer sendHttpStatus, sendRpcCode;
     public boolean sendMayHaveReachedGateway;
     public long sendStartedMs, sendUpdatedMs;
+    /** User accepted continuation risk; never means the old request failed or was cancelled. */
+    public long continuationRiskAcceptedMs;
+    public long deadlineSeconds, receiptLastCheckedMs;
+    public int receiptAttempts;
     /** Optional liquidity fields. Existing histories remain compatible; no signing data. */
     public String liquidityAction;
     public String lpUnits, estimatedLp, actualLp;

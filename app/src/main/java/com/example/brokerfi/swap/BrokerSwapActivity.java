@@ -269,7 +269,11 @@ public class BrokerSwapActivity extends AppCompatActivity {
         return amm() && from != SwapAsset.BKC ? gasReserve.multiply(BigInteger.valueOf(2)) : gasReserve;
     }
     private TokenTxRecord unresolved() {
-        for (TokenTxRecord r : TokenTxHistoryStore.getAll(this, wallet)) if (TokenTxHistoryStore.isUnresolvedSwap(r)) return r;
+        for (TokenTxRecord r : TokenTxHistoryStore.getAll(this, wallet)) if (TokenTxHistoryStore.isBlockingSwap(r)) return r;
+        return null;
+    }
+    private TokenTxRecord deferred() {
+        for(TokenTxRecord r:TokenTxHistoryStore.getAll(this,wallet))if(TradeRecoveryPolicy.deferred(r))return r;
         return null;
     }
     private SwapQuoteMath.Quote quote(BigInteger input) { return SwapQuoteMath.quote(pool, from, to, input, slippage, SystemClock.elapsedRealtime()); }
@@ -297,9 +301,10 @@ public class BrokerSwapActivity extends AppCompatActivity {
         status.setText("mUSDT 是测试资产，两种 wBKC 不可混用。\n" + (wallet.isEmpty() ? "请先登录钱包" : preparing ? "发送前重新检查…"
                 : SwapOperationRunner.active(wallet) ? "交易处理中，请勿重复操作" : pending!=null ? "有未确认交易，点击此处核查（不重发）"
                 : loading ? loadingText() : error.isEmpty() ? "网络 1051" : error)
-                +(pending!=null ? loading?"\n"+loadingText():!error.isEmpty()?"\n"+error:"":""));
+                +(pending!=null ? loading?"\n"+loadingText():!error.isEmpty()?"\n"+error:"":"")
+                +(deferred()!=null?"\n旧记录仍待核查，已接受风险继续（点击查看）":""));
         status.setTextColor(pending!=null || !error.isEmpty()?0xff991B1B:0xff475569);
-        status.setOnClickListener(v -> { TokenTxRecord r=unresolved(); if(r!=null)TradeHistory.showRecord(this,config,wallet,r,() -> { render(); fetch(); }); });
+        status.setOnClickListener(v -> { TokenTxRecord r=unresolved(); if(r==null)r=deferred(); if(r!=null)TradeHistory.showRecord(this,config,wallet,r,() -> { render(); fetch(); }); });
         if(swapHistory!=null)swapHistory.bind(config,wallet,() -> { render(); fetch(); });
         updateTabs();
         receive.setText("—"); details.setText(""); submit.setEnabled(false);
@@ -387,10 +392,12 @@ public class BrokerSwapActivity extends AppCompatActivity {
                 if(latestPool!=null && !latestPool.isFresh(SystemClock.elapsedRealtime()))throw new IllegalStateException("Quote expired");
                 stage = "交易编码";
                 String target, data; BigInteger value = BigInteger.ZERO;
+                long deadline=confirmed!=null && !approval?System.currentTimeMillis()/1000+300:0;
                 if (approval) { target=contract(pay); data=BrokerSwapAbi.call("approve",new Address(config.router()),new Uint256(input)); }
-                else if (confirmed!=null) { target=config.router(); data=BrokerSwapAbi.swap(config,confirmed,BrokerSwapConfig.walletAddress(address),System.currentTimeMillis()/1000+300); if(pay==SwapAsset.BKC)value=input; }
+                else if (confirmed!=null) { target=config.router(); data=BrokerSwapAbi.swap(config,confirmed,BrokerSwapConfig.walletAddress(address),deadline); if(pay==SwapAsset.BKC)value=input; }
                 else { target=contract(pay.isWrapped()?pay:out); data=pay==SwapAsset.BKC ? wrappedBkcContractHelper.encodeDeposit() : wrappedBkcContractHelper.encodeWithdraw(input); if(pay==SwapAsset.BKC)value=input; }
                 TokenTxRecord record = record(pay,out,input,confirmed,approval);
+                record.deadlineSeconds=deadline;
                 final String sendTarget=target,sendData=data; final BigInteger sendValue=value;
                 final SwapPoolSnapshot finalPool=latestPool;
                 main.post(() -> {
