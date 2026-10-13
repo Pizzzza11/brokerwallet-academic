@@ -181,14 +181,17 @@ public final class BrokerSwapClient {
     public BigInteger gasReserve() throws Exception {
         return SwapFeePolicy.reserve(SwapReceipt.quantity(rpc("eth_gasPrice")));
     }
-    public String send(String key, String target, String data, BigInteger value) throws Exception {
-        String uuid = UUID.randomUUID().toString(), valueHex = "0x" + value.toString(16), gasHex = "0x" + GAS_LIMIT.toString(16);
+    String send(String key, String target, String data, BigInteger value, SwapSendDiagnostics diagnostics) throws Exception {
+        diagnostics.stage("SIGNING");
+        String uuid = diagnostics.record.sendRequestId, valueHex = "0x" + value.toString(16), gasHex = "0x" + GAS_LIMIT.toString(16);
         String[] signature = SecurityUtil.signECDSA(key, target + data + valueHex + gasHex + uuid);
         SendETHTXReq request = new SendETHTXReq();
         request.setPublicKey(SecurityUtil.getPublicKeyFromPrivateKey(key)); request.setRandomStr(uuid);
         request.setTo(target); request.setData(data); request.setValue(valueHex); request.setGas(gasHex);
         request.setSign1(signature[0]); request.setSign2(signature[1]);
-        return SwapReceipt.sentHash(post(ChainConfig.getDashGatewayPostUrl("eth_sendTransaction"), request));
+        RequestBody body=RequestBody.create(MediaType.parse("application/json; charset=utf-8"),GSON.toJson(request));
+        diagnostics.stage("REQUEST_READY");
+        return diagnostics.post(http,ChainConfig.getDashGatewayPostUrl("eth_sendTransaction"),body);
     }
     public SwapReceipt receipt(String key, String hash, SwapAsset from, SwapAsset to, BigInteger input, String wallet) throws Exception {
         return SwapReceipt.parse(receiptRaw(key, hash), hash, cfg, from, to, input, wallet);

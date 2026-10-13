@@ -27,25 +27,33 @@ public final class SwapOperationRunner {
         String lock = wallet.toLowerCase(Locale.ROOT);
         if (!ACTIVE.add(lock)) return false;
         WORK.execute(() -> {
-            boolean attempted = false;
+            SwapSendDiagnostics diagnostics=new SwapSendDiagnostics(record,
+                    () -> TokenTxHistoryStore.upsertSwap(app,wallet,record));
+            boolean hashJournaled=false;
             try {
                 if (!wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(app)))) throw new IllegalStateException("Account changed");
                 for (TokenTxRecord old : TokenTxHistoryStore.getAll(app, wallet))
                     if (TokenTxHistoryStore.isUnresolvedSwap(old)) throw new IllegalStateException("Unresolved operation");
                 record.status = "SUBMITTING";
-                if (!TokenTxHistoryStore.upsertSwap(app, wallet, record)) throw new IllegalStateException("Cannot save journal");
+                record.sendRequestId=java.util.UUID.randomUUID().toString();
+                record.sendStartedMs=System.currentTimeMillis();
+                diagnostics.stage("PREPARE");
                 String key = TokenWalletHelper.getCurrentPrivateKey(app);
                 if (!wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(app)))
                         || !wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(com.example.brokerfi.core.security.SecurityUtil.GetAddress(key))))
                     throw new IllegalStateException("Account changed");
-                attempted = true;
                 BrokerSwapClient client = new BrokerSwapClient(cfg);
-                record.txHash = client.send(key, target, data, value);
+                record.txHash = client.send(key, target, data, value, diagnostics);
                 record.status = "PENDING";
-                TokenTxHistoryStore.upsertSwap(app, wallet, record);
+                diagnostics.stage("HASH_RECEIVED");
+                hashJournaled=true;
                 poll(app, client, key, wallet, record);
             } catch (Exception e) {
-                record.status = record.txHash != null ? "PENDING" : attempted ? "UNKNOWN" : "NOT_SENT";
+                if (hashJournaled) {
+                    if(record.receiptFailure==null)record.receiptFailure=SwapSendDiagnostics.category(e);
+                }
+                else diagnostics.failure(e);
+                record.status = SwapSendDiagnostics.failureStatus(record);
                 TokenTxHistoryStore.upsertSwap(app, wallet, record);
             } finally {
                 ACTIVE.remove(lock);
@@ -63,13 +71,17 @@ public final class SwapOperationRunner {
             try {
                 if (wallet.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(app))))
                     poll(app, new BrokerSwapClient(cfg), TokenWalletHelper.getCurrentPrivateKey(app), wallet, record);
-            } catch (Exception ignored) { } finally {
+            } catch (Exception e) {
+                if(record.receiptFailure==null)record.receiptFailure=SwapSendDiagnostics.category(e);
+                TokenTxHistoryStore.upsertSwap(app,wallet,record);
+            } finally {
                 ACTIVE.remove(lock); MAIN.post(() -> listener.finished(record));
             }
         });
         return true;
     }
     private static void poll(Context app, BrokerSwapClient client, String key, String wallet, TokenTxRecord record) throws Exception {
+        record.receiptFailure=null;
         for (int i = 0; i < 3; i++) {
             if (record.isLiquidity()) {
                 LiquidityReceipt receipt=LiquidityReceipt.parse(client.receiptRaw(key,record.txHash),client.deployment(),record,wallet);
@@ -78,7 +90,7 @@ public final class SwapOperationRunner {
                 if (receipt.bkc!=null) record.actualBkc=SwapQuoteMath.format(receipt.bkc,18);
                 if (receipt.lp!=null) record.actualLp=SwapQuoteMath.format(receipt.lp,18);
                 if (receipt.gasCost!=null) record.gasCost=SwapQuoteMath.format(receipt.gasCost,18);
-                TokenTxHistoryStore.upsertSwap(app,wallet,record);
+                saveReceipt(app,wallet,record);
                 if (!"PENDING".equals(record.status)) break;
                 if (i<2) Thread.sleep(2500);
                 continue;
@@ -89,9 +101,15 @@ public final class SwapOperationRunner {
             if (receipt.actualOutput != null && !"APPROVAL".equals(record.type))
                 record.actualOutput = SwapQuoteMath.format(receipt.actualOutput, SwapAsset.valueOf(record.toAsset).decimals);
             if (receipt.gasCost != null) record.gasCost = SwapQuoteMath.format(receipt.gasCost, 18);
-            TokenTxHistoryStore.upsertSwap(app, wallet, record);
+            saveReceipt(app,wallet,record);
             if (!"PENDING".equals(record.status)) break;
             if (i < 2) Thread.sleep(2500);
+        }
+    }
+    private static void saveReceipt(Context app,String wallet,TokenTxRecord record) throws java.io.IOException {
+        if(!TokenTxHistoryStore.upsertSwap(app,wallet,record)) {
+            record.receiptFailure="JOURNAL";
+            throw new java.io.IOException("Cannot persist receipt");
         }
     }
 }

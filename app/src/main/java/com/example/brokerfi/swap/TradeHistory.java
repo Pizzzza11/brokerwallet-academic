@@ -60,6 +60,11 @@ final class TradeHistory {
             ClipboardManager clipboard=(ClipboardManager)activity.getSystemService(Context.CLIPBOARD_SERVICE);
             if(clipboard!=null)clipboard.setPrimaryClip(ClipData.newPlainText("交易编号",r.txHash));
         });
+        else if(r.sendRequestId!=null && r.sendRequestId.matches("[0-9a-fA-F-]{36}"))
+            dialog.setNeutralButton("复制请求关联号",(d,w) -> {
+                ClipboardManager clipboard=(ClipboardManager)activity.getSystemService(Context.CLIPBOARD_SERVICE);
+                if(clipboard!=null)clipboard.setPrimaryClip(ClipData.newPlainText("网关请求关联号（非交易哈希）",r.sendRequestId));
+            });
         if(TokenTxHistoryStore.isUnresolvedSwap(r) && SwapReceipt.validHash(r.txHash) && config!=null)
             dialog.setPositiveButton("查询结果（不重发）",(d,w) -> {
                 SwapOperationRunner.resume(activity,config,wallet,r,record -> { if(!activity.isDestroyed())changed.run(); }); changed.run();

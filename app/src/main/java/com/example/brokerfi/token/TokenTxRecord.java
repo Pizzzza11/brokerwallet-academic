@@ -44,6 +44,11 @@ public class TokenTxRecord implements Serializable {
     public int slippageBps;
     public int impactBps;
     public String gasCost;
+    /** Allowlisted diagnostics only: never persist request bodies, signatures or keys. */
+    public String sendRequestId, sendStage, sendFailure, receiptFailure;
+    public Integer sendHttpStatus, sendRpcCode;
+    public boolean sendMayHaveReachedGateway;
+    public long sendStartedMs, sendUpdatedMs;
     /** Optional liquidity fields. Existing histories remain compatible; no signing data. */
     public String liquidityAction;
     public String lpUnits, estimatedLp, actualLp;
