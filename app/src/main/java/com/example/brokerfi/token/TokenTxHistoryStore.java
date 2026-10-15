@@ -387,7 +387,7 @@ public final class TokenTxHistoryStore {
     }
 
     private static String storageKey(String walletAddress) {
-        return KEY_PREFIX + ChainAddressUtil.normalizeAddress(walletAddress);
+        return KEY_PREFIX + HistoryPreferenceMigration.canonicalWallet(walletAddress);
     }
 
     private static void migrateLegacyPrefs(Context context) {
@@ -395,16 +395,12 @@ public final class TokenTxHistoryStore {
                 .getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE);
         SharedPreferences current = context.getApplicationContext()
                 .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        if (!legacy.getAll().isEmpty() && current.getAll().isEmpty()) {
+        java.util.Map<String,String> missing=HistoryPreferenceMigration.missingLists(current.getAll(),legacy.getAll());
+        if (!missing.isEmpty()) {
             SharedPreferences.Editor editor = current.edit();
-            for (java.util.Map.Entry<String, ?> entry : legacy.getAll().entrySet()) {
-                String key = entry.getKey();
-                Object value = entry.getValue();
-                if (value instanceof String) {
-                    editor.putString(key, (String) value);
-                }
-            }
-            editor.apply();
+            for (java.util.Map.Entry<String,String> entry : missing.entrySet())editor.putString(entry.getKey(),entry.getValue());
+            // Keep legacy untouched. A failed copy can still be read from the original below.
+            editor.commit();
         }
     }
 
@@ -412,6 +408,12 @@ public final class TokenTxHistoryStore {
         migrateLegacyPrefs(context);
         SharedPreferences prefs = context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String json = prefs.getString(key, null);
+        if (!prefs.contains(key))json=prefs.getString(HistoryPreferenceMigration.aliasKey(key),null);
+        if(json==null) {
+            SharedPreferences legacy=context.getApplicationContext().getSharedPreferences(LEGACY_PREFS,Context.MODE_PRIVATE);
+            json=legacy.getString(key,null);
+            if(json==null)json=legacy.getString(HistoryPreferenceMigration.aliasKey(key),null);
+        }
         if (TextUtils.isEmpty(json)) {
             return new ArrayList<>();
         }
