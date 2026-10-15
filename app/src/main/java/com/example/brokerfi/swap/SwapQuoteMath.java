@@ -30,6 +30,12 @@ public final class SwapQuoteMath {
                               BigInteger input, int slippageBps, long now) {
         if (!SwapAsset.isAmm(from, to)) throw new IllegalArgumentException("Unsupported pool route");
         if (pool == null || !pool.isFresh(now)) throw new IllegalArgumentException("Quote expired; refresh the pool");
+        return reference(pool, from, to, input, slippageBps);
+    }
+    /** Display-only calculation, including stale reserves. Financial code must call quote(). */
+    public static Quote reference(SwapPoolSnapshot pool, SwapAsset from, SwapAsset to,
+                                  BigInteger input, int slippageBps) {
+        if (pool == null || !SwapAsset.isAmm(from, to)) throw new IllegalArgumentException("No pool route");
         if (slippageBps != 50 && slippageBps != 100 && slippageBps != 200 && slippageBps != 500)
             throw new IllegalArgumentException("Unsupported slippage");
         BigInteger reserveIn = from == SwapAsset.MUSDT ? pool.musdtReserve : pool.wbkcReserve;

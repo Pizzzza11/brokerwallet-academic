@@ -40,16 +40,18 @@ final class LiquidityPanelController {
     private final Button approveAdd,add,approveRemove,remove;
     private final SeekBar slider;
     private final TradeHistory history;
+    private final TradeQuoteRequest quoteRequest = new TradeQuoteRequest();
     private String wallet="",error="";
     private Snapshot snapshot;
     private long validatedAt;
     private volatile int generation;
     private int percent,readProgress;
     private volatile boolean visible,resumed,preparing;
-    private boolean loading,confirming,updating,lastEditedBkc=true;
+    private boolean loading,confirming,updating,lastEditedBkc=true,invalidated;
     private final Runnable tick=new Runnable() { public void run() {
         if(!resumed) return;
-        if(visible) { render(); if(!loading && !busy() && error.isEmpty() && !SwapOperationRunner.active(wallet))fetch(); }
+        if(visible) { render(); if(!loading && !locked() && error.isEmpty()
+                && TradeQuoteRequest.autoRefreshDue(SystemClock.elapsedRealtime(),snapshot==null || invalidated?0:snapshot.pool.capturedAtMs))fetch(); }
         main.postDelayed(this,15000);
     }};
     private static final class Snapshot {
@@ -75,7 +77,7 @@ final class LiquidityPanelController {
         history=new TradeHistory(activity,R.id.lp_history_toggle,R.id.lp_history_rows,true);
         bkc.addTextChangedListener(watcher(true)); musdt.addTextChangedListener(watcher(false));
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            public void onProgressChanged(SeekBar bar,int value,boolean user) { percent=value; render(); }
+            public void onProgressChanged(SeekBar bar,int value,boolean user) { quoteRequest.cancel(); percent=value; render(); }
             public void onStartTrackingTouch(SeekBar bar) {} public void onStopTrackingTouch(SeekBar bar) {}
         });
         int[] ids={R.id.lp_percent_25,R.id.lp_percent_50,R.id.lp_percent_75,R.id.lp_percent_100};
@@ -88,12 +90,12 @@ final class LiquidityPanelController {
     private TextWatcher watcher(boolean fromBkc) { return new TextWatcher() {
         public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
         public void onTextChanged(CharSequence s,int start,int before,int count) {
-            if(updating)return; lastEditedBkc=fromBkc; matchOther(); render();
+            if(updating)return; quoteRequest.cancel(); lastEditedBkc=fromBkc; matchOther(); render();
         }
         public void afterTextChanged(Editable text) {}
     }; }
     private void matchOther() {
-        if(snapshot==null || !snapshot.fresh())return;
+        if(!viewFresh())return;
         EditText input=lastEditedBkc?bkc:musdt, output=lastEditedBkc?musdt:bkc;
         try {
             BigInteger units=SwapQuoteMath.parseUnits(input.getText().toString(),lastEditedBkc?18:6);
@@ -104,17 +106,17 @@ final class LiquidityPanelController {
     }
     boolean busy() { return confirming || preparing; }
     private boolean locked() { return busy() || otherBusy.get() || SwapOperationRunner.active(wallet); }
-    void setVisible(boolean value) { if(value!=visible)generation++; visible=value; if(value) { render(); fetch(); } }
+    void setVisible(boolean value) { if(value!=visible) { generation++; quoteRequest.cancel(); } visible=value; if(value) { render(); fetch(); } }
     void onResume(String account) {
         if(!wallet.equalsIgnoreCase(account)) {
-            wallet=account; generation++; validatedAt=0; snapshot=null; error="";
+            quoteRequest.cancel(); wallet=account; generation++; validatedAt=0; snapshot=null; invalidated=false; error="";
             updating=true; bkc.setText(""); musdt.setText(""); updating=false; slider.setProgress(0);
         }
         resumed=true; main.removeCallbacks(tick); main.postDelayed(tick,15000);
         if(visible)fetch(); render();
     }
-    void onPause() { resumed=false; generation++; main.removeCallbacks(tick); }
-    void onDestroy() { resumed=false; generation++; main.removeCallbacks(tick); }
+    void onPause() { quoteRequest.cancel(); resumed=false; generation++; main.removeCallbacks(tick); }
+    void onDestroy() { quoteRequest.cancel(); resumed=false; generation++; main.removeCallbacks(tick); }
     private boolean sameAccount(String address) { return address.equalsIgnoreCase(BrokerSwapConfig.walletId(TokenWalletHelper.getWalletAddress(activity))); }
     private TokenTxRecord unresolved() {
         for(TokenTxRecord record:TokenTxHistoryStore.getAll(activity,wallet))if(TokenTxHistoryStore.isBlockingSwap(record))return record;
@@ -124,20 +126,21 @@ final class LiquidityPanelController {
         for(TokenTxRecord r:TokenTxHistoryStore.getAll(activity,wallet))if(TradeRecoveryPolicy.deferred(r))return r;
         return null;
     }
-    void fetch() {
-        if(!resumed || !visible || loading || busy() || config==null || !config.hasLiquidity() || wallet.isEmpty()) { parentChanged.run(); return; }
+    void fetch() { fetch(false); }
+    private void fetch(boolean userRequested) {
+        if(!resumed || !visible || loading || locked() || config==null || !config.hasLiquidity() || wallet.isEmpty()) { parentChanged.run(); return; }
         loading=true; readProgress=0; error=""; render();
         final int id=generation; final String account=wallet;
         final boolean validate=validatedAt==0 || SystemClock.elapsedRealtime()-validatedAt>600000;
         TradeReadSession session=new TradeReadSession(
-                () -> resumed && visible && !preparing && id==generation && sameAccount(account),
+                () -> resumed && visible && !locked() && id==generation && sameAccount(account),
                 number -> main.post(() -> {
                     if(resumed && visible && id==generation && sameAccount(account)) {
                         readProgress=number; render(); parentChanged.run();
                     }
                 }));
         BrokerSwapClient readClient=new BrokerSwapClient(config,session);
-        TradeReadQueue.execute(() -> {
+        Runnable work = () -> {
             String stage="账户";
             try {
                 session.check();
@@ -154,7 +157,9 @@ final class LiquidityPanelController {
                     loading=false;
                     if(activity.isDestroyed())return;
                     if(!resumed || !visible || id!=generation || !sameAccount(account)) { fetch(); return; }
-                    snapshot=read; error=""; matchOther(); render(); parentChanged.run();
+                    snapshot=read; invalidated=false; error=""; matchOther(); render(); parentChanged.run();
+                    String requested=quoteRequest.take();
+                    if(requested!=null && !locked()) confirmNext("ADD".equals(requested));
                 });
             } catch(Exception e) {
                 final String failed=stage, reason=TradeReadFailure.describe(e);
@@ -163,12 +168,15 @@ final class LiquidityPanelController {
                     loading=false;
                     if(activity.isDestroyed())return;
                     if(cancelled || !resumed || !visible || id!=generation || !sameAccount(account)) { fetch(); return; }
-                    snapshot=null; error=failed+"："+reason+"。请下拉刷新；不会使用旧报价交易。"; render();
+                    quoteRequest.cancel(); invalidated=true;
+                    error=failed+"："+reason+"。旧数据仅供参考，请获取最新报价；此次读取不发送资金交易。"; render();
                     parentChanged.run();
                 });
             }
-        });
+        };
+        if(userRequested)TradeReadQueue.executeUser(work);else TradeReadQueue.execute(work);
     }
+    private boolean viewFresh() { return snapshot!=null && snapshot.fresh() && !invalidated && error.isEmpty(); }
     boolean loading() { return loading; }
     private Snapshot readSnapshot(String key,String address) throws Exception {
         return readSnapshot(client,key,address);
@@ -186,6 +194,7 @@ final class LiquidityPanelController {
         if(wallet.isEmpty())return "请先登录钱包";
         if(!sameAccount(wallet))return "账户已切换，请重新进入";
         if(unresolved()!=null)return "有未确认交易，点击上方提示核查";
+        if(s==snapshot && (invalidated || !error.isEmpty()))return "请获取最新报价";
         if(s==null)return loading?"正在查询链上数据…":"请下拉刷新链上数据";
         if(!s.fresh())return "报价已过期，请下拉刷新";
         return "";
@@ -207,16 +216,17 @@ final class LiquidityPanelController {
     }
     private void render() {
         Snapshot s=snapshot; boolean lock=locked(); TokenTxRecord pending=unresolved();
-        String state=pending!=null?"有未确认交易："+SwapRecordPresentation.status(pending.status)+"（点击核查，不重发）"
-                : busy()?"发送前重新检查…":SwapOperationRunner.active(wallet)?"交易处理中，请勿重复操作"
+        String operation=TradeStatusText.operation(confirming,preparing,SwapOperationRunner.active(wallet),pending);
+        String state=!operation.isEmpty()?operation
                 : loading?loadingText():!error.isEmpty()?error:s==null?"下拉刷新读取链上持仓":"网络 1051 · 允许到账浮动 0.5%";
         status.setText("mUSDT 是测试资产。\n"+state+(pending!=null?loading?"\n"+loadingText():!error.isEmpty()?"\n"+error:"":"")
                 +(deferred()!=null?"\n旧记录仍待核查，已接受风险继续（点击查看）":"")); status.setTextColor(pending!=null || !error.isEmpty()?0xff991B1B:0xff475569);
         bkc.setEnabled(!lock); musdt.setEnabled(!lock); slider.setEnabled(!lock);
         for(int id:new int[]{R.id.lp_percent_25,R.id.lp_percent_50,R.id.lp_percent_75,R.id.lp_percent_100})activity.findViewById(id).setEnabled(!lock);
-        balanceBkc.setText("余额："+(s==null?"—":TradeDisplay.amount(s.nativeBalance,18))+" BKC");
-        balanceMusdt.setText("余额："+(s==null?"—":TradeDisplay.amount(s.musdtBalance,6))+" mUSDT");
-        owned.setText("Your LP tokens："+(s==null?"—":TradeDisplay.amount(s.lpBalance,18)));
+        String cached=s!=null && !viewFresh()?"（旧数据）":"";
+        balanceBkc.setText("余额："+(s==null?"—":TradeDisplay.amount(s.nativeBalance,18))+" BKC"+cached);
+        balanceMusdt.setText("余额："+(s==null?"—":TradeDisplay.amount(s.musdtBalance,6))+" mUSDT"+cached);
+        owned.setText("Your LP tokens："+(s==null?"—":TradeDisplay.amount(s.lpBalance,18))+cached);
         percentLabel.setText("撤出比例："+percent+"%");
         String base=baseProblem(s); String idle=!base.isEmpty()?base:lock?"处理中，请勿重复操作":"请输入两项金额";
         boolean blocked=pending!=null || !error.isEmpty() || s!=null && !s.fresh();
@@ -224,10 +234,11 @@ final class LiquidityPanelController {
         addQuote.setText("输入任一金额，另一项按池内比例联动。滑点 0.5%，多余金额由合约退回。");
         try {
             BigInteger desiredM=SwapQuoteMath.parseUnits(musdt.getText().toString(),6), desiredB=SwapQuoteMath.parseUnits(bkc.getText().toString(),18);
-            if(s!=null && s.fresh()) {
+            if(s!=null) {
                 LiquidityMath.AddQuote q=LiquidityMath.add(s.pool,s.supply,desiredM,desiredB);
                 addQuote.setText("预计使用："+TradeDisplay.amount(q.bkc,18)+" BKC + "+TradeDisplay.amount(q.musdt,6)+" mUSDT"
-                        +"\nEstimated LP："+TradeDisplay.amount(q.lp,18)+"\nEstimated pool share："+share(q.lp,s.supply.add(q.lp))+"%");
+                        +"\nEstimated LP："+TradeDisplay.amount(q.lp,18)+"\nEstimated pool share："+share(q.lp,s.supply.add(q.lp))+"%"
+                        +(!viewFresh()?"\n旧报价，仅供参考":""));
                 String problem=addProblem(s,desiredM,desiredB); boolean approved=s.musdtAllowance.compareTo(desiredM)>=0;
                 boolean valid=problem.isEmpty() && !lock;
                 TradeButtons.state(approveAdd,approved?"mUSDT 已授权":problem.isEmpty()?"Approve mUSDT（仅本次金额）":problem,valid && !approved,blocked || !problem.isEmpty());
@@ -238,17 +249,32 @@ final class LiquidityPanelController {
         TradeButtons.state(approveRemove,"Approve LP · "+removeIdle,false,blocked); TradeButtons.state(remove,"Remove Liquidity · "+removeIdle,false,blocked);
         removeQuote.setText("Estimated receive：—");
         try {
-            if(s!=null && s.fresh()) {
+            if(s!=null) {
                 BigInteger lp=LiquidityMath.portion(s.lpBalance,percent);
                 BigInteger[] outputs=LiquidityMath.remove(s.pool,s.supply,lp);
                 if(LiquidityMath.minimum(outputs[0]).signum()==0 || LiquidityMath.minimum(outputs[1]).signum()==0)throw new IllegalArgumentException("Too small");
-                removeQuote.setText("撤出 LP："+TradeDisplay.amount(lp,18)+"\nEstimated receive："+TradeDisplay.amount(outputs[1],18)+" BKC + "+TradeDisplay.amount(outputs[0],6)+" mUSDT");
+                removeQuote.setText("撤出 LP："+TradeDisplay.amount(lp,18)+"\nEstimated receive："+TradeDisplay.amount(outputs[1],18)+" BKC + "+TradeDisplay.amount(outputs[0],6)+" mUSDT"
+                        +(!viewFresh()?"\n旧报价，仅供参考":""));
                 String problem=removeProblem(s,lp); boolean approved=s.lpAllowance.compareTo(lp)>=0, valid=problem.isEmpty() && !lock;
                 TradeButtons.state(approveRemove,approved?"LP 已授权":problem.isEmpty()?"Approve LP（仅本次份额）":problem,valid && !approved,blocked || !problem.isEmpty());
                 TradeButtons.state(remove,!problem.isEmpty()?problem:lock?"处理中，请勿重复操作":approved?"Remove Liquidity":"Remove Liquidity · 请先授权 LP",valid && approved,blocked || !problem.isEmpty());
             }
         } catch(Exception ignored) { if(percent>0)removeQuote.setText(s!=null && s.lpBalance.signum()==0?"当前没有 LP 持仓。":"份额太小或数据未就绪，无法撤出。"); }
+        if(lock || pending!=null) {
+            String text=operation.isEmpty()?"其他操作检查中，请稍候":operation;
+            for(Button button:new Button[]{approveAdd,add,approveRemove,remove})TradeButtons.state(button,text,false,pending!=null);
+        } else if(!viewFresh() && config!=null && config.hasLiquidity() && !wallet.isEmpty() && sameAccount(wallet)) {
+            TradeButtons.state(approveAdd,"获取新报价后核对授权",false,false);
+            TradeButtons.state(approveRemove,"获取新报价后核对授权",false,false);
+            String text=quoteRequest.pending()?"正在获取最新报价，尚未发送":"获取最新报价";
+            TradeButtons.state(add,text,hasAddInput() && !quoteRequest.pending(),false);
+            TradeButtons.state(remove,text,percent>0 && !quoteRequest.pending(),false);
+        }
         renderPosition(s); history.bind(config,wallet,this::afterHistory);
+    }
+    private boolean hasAddInput() {
+        try { SwapQuoteMath.parseUnits((lastEditedBkc?bkc:musdt).getText().toString(),lastEditedBkc?18:6); return true; }
+        catch(Exception e) { return false; }
     }
     private static String share(BigInteger lp,BigInteger total) { return TradeDisplay.decimal(new BigDecimal(lp).multiply(new BigDecimal("100")).divide(new BigDecimal(total),12,RoundingMode.DOWN)); }
     private void renderPosition(Snapshot s) {
@@ -256,12 +282,12 @@ final class LiquidityPanelController {
         BigInteger pooledM=s.pool.musdtReserve.multiply(s.lpBalance).divide(s.supply), pooledB=s.pool.wbkcReserve.multiply(s.lpBalance).divide(s.supply);
         BigInteger value=pooledM.add(pooledB.multiply(s.pool.musdtReserve).divide(s.pool.wbkcReserve));
         position.setText("Pooled BKC："+TradeDisplay.amount(pooledB,18)+"\nPooled mUSDT："+TradeDisplay.amount(pooledM,6)
-                +"\nPool share："+share(s.lpBalance,s.supply)+"%\nPosition value：≈ "+TradeDisplay.amount(value,6)+" mUSDT"+(s.fresh()?"":"\n数据已过期，仅供参考"));
+                +"\nPool share："+share(s.lpBalance,s.supply)+"%\nPosition value：≈ "+TradeDisplay.amount(value,6)+" mUSDT"+(viewFresh()?"":"\n旧数据，仅供参考"));
         // Ownership changes invalidate the observation basis; do not attribute old pool growth to new LP.
         SharedPreferences prefs=activity.getSharedPreferences("lp_observation_v1",Context.MODE_PRIVATE);
         String prefix=wallet+"_"+config.pair()+"_"; BigInteger root=LiquidityMath.sqrt(s.pool.musdtReserve.multiply(s.pool.wbkcReserve));
         String oldLp=prefs.getString(prefix+"lp","");
-        if(s.fresh() && !oldLp.equals(s.lpBalance.toString()))prefs.edit().putString(prefix+"lp",s.lpBalance.toString())
+        if(viewFresh() && !oldLp.equals(s.lpBalance.toString()))prefs.edit().putString(prefix+"lp",s.lpBalance.toString())
                 .putString(prefix+"root",root.toString()).putString(prefix+"supply",s.supply.toString()).apply();
         try {
             BigInteger earned=LiquidityMath.estimatedFeesMusdt(s.pool,s.supply,s.lpBalance,
@@ -269,8 +295,21 @@ final class LiquidityPanelController {
             fees.setText("Estimated earned fees：≈ "+TradeDisplay.amount(earned,6)+" mUSDT\n仅估算本机观察以来每 LP 的池内增长；非实际盈利。");
         } catch(Exception e) { fees.setText("Estimated earned fees：暂无可靠观察数据。"); }
     }
+    private void confirmNext(boolean adding) {
+        if(!viewFresh()) { invalidated=true; error="读取结果已过期，请再次获取最新报价；未发送交易。"; render(); return; }
+        try {
+            BigInteger amount=adding?SwapQuoteMath.parseUnits(musdt.getText().toString(),6):LiquidityMath.portion(snapshot.lpBalance,percent);
+            boolean approved=(adding?snapshot.musdtAllowance:snapshot.lpAllowance).compareTo(amount)>=0;
+            confirm(adding,!approved);
+        } catch(Exception e) { toast("请检查金额或撤出比例，未发送交易"); }
+    }
     private void confirm(boolean adding,boolean approval) {
         if(locked())return;
+        if(config==null || !config.hasLiquidity() || wallet.isEmpty() || !sameAccount(wallet) || unresolved()!=null) { toast("请核对账户、部署或未确认交易"); return; }
+        if(!viewFresh()) {
+            if(adding?!hasAddInput():percent<=0) { toast("请先输入金额或选择撤出比例"); return; }
+            quoteRequest.request(adding?"ADD":"REMOVE"); fetch(true); render(); return;
+        }
         try {
             Snapshot s=snapshot; String base=baseProblem(s); if(!base.isEmpty()) { toast(base); return; }
             BigInteger desiredM=adding?SwapQuoteMath.parseUnits(musdt.getText().toString(),6):BigInteger.ZERO;
@@ -302,12 +341,14 @@ final class LiquidityPanelController {
     private void prepare(int id,String account,String action,BigInteger desiredM,BigInteger desiredB,BigInteger lp,
                          BigInteger minM,BigInteger minB,BigInteger minLp,BigInteger estimatedLp) {
         preparing=true; render(); parentChanged.run();
-        TradeReadQueue.execute(() -> {
+        TradeReadQueue.executeUser(() -> {
             try {
                 if(id!=generation || !sameAccount(account))throw new IllegalStateException("Account changed");
                 String key=TokenWalletHelper.getCurrentPrivateKey(activity.getApplicationContext());
                 // Always check code/getters again for a financial action, even if display validation is cached.
                 client.validateLiquidity(key);
+                long checked=SystemClock.elapsedRealtime();
+                main.post(() -> { if(resumed && visible && id==generation && sameAccount(account))validatedAt=checked; });
                 Snapshot current=readSnapshot(key,account);
                 boolean adding="ADD".equals(action)||"APPROVE_MUSDT".equals(action), approval=action.startsWith("APPROVE");
                 String problem=adding?addProblem(current,desiredM,desiredB):removeProblem(current,lp);
@@ -340,7 +381,7 @@ final class LiquidityPanelController {
                 main.post(() -> {
                     preparing=false;
                     if(activity.isDestroyed() || id!=generation || !sameAccount(account))return;
-                    if(!current.fresh()) { snapshot=null; error="报价已过期，未发交易。请刷新后重新确认。"; render(); parentChanged.run(); return; }
+                    if(!current.fresh()) { invalidated=true; error="检查结果已过期，未发交易。请获取最新报价后重新确认。"; render(); parentChanged.run(); return; }
                     if(!SwapOperationRunner.submit(activity,config,account,record,target,data,value,this::completed))toast("已有交易处理中");
                     render(); parentChanged.run();
                 });
@@ -348,7 +389,7 @@ final class LiquidityPanelController {
                 main.post(() -> {
                     preparing=false;
                     if(activity.isDestroyed())return;
-                    if(id==generation && sameAccount(account)) { snapshot=null; error="发送前检查未通过，未发交易。请刷新后重新确认。"; toast(error); render(); }
+                    if(id==generation && sameAccount(account)) { invalidated=true; error="发送前检查未通过，未发交易。请获取最新报价后重新确认。"; toast(error); render(); }
                     parentChanged.run();
                 });
             }
@@ -356,9 +397,11 @@ final class LiquidityPanelController {
     }
     private void completed(TokenTxRecord record) {
         if(activity.isDestroyed())return;
-        toast(SwapRecordPresentation.status(record.status)); snapshot=null; fetch(); render(); parentChanged.run();
+        toast(record.liquidityAction!=null && record.liquidityAction.startsWith("APPROVE") && "SUCCESS".equals(record.status)
+                ? "授权成功，请核对报价后单独确认添加／撤出" : SwapRecordPresentation.status(record.status));
+        quoteRequest.cancel(); invalidated=true; fetch(); render(); parentChanged.run();
     }
-    void changed() { if(visible) { snapshot=null; fetch(); render(); } }
+    void changed() { quoteRequest.cancel(); invalidated=true; if(visible) { fetch(); render(); } }
     private void afterHistory() { render(); if(!SwapOperationRunner.active(wallet))fetch(); parentChanged.run(); }
     private String loadingText() {
         return readProgress==0?"查询排队中…":"正在查询链上数据（第 "+readProgress+" 项，首次可能需数分钟）…";

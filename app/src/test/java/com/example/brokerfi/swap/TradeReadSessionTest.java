@@ -11,6 +11,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.Assert.*;
 
 public class TradeReadSessionTest {
+    @Test public void userReadRunsBeforeQueuedBackgroundReadsWithoutInterruptingTheActiveOne() throws Exception {
+        List<String> events=Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch started=new CountDownLatch(1),release=new CountDownLatch(1),complete=new CountDownLatch(3);
+        TradeReadQueue.execute(() -> {
+            events.add("active");started.countDown();
+            try { release.await(3,TimeUnit.SECONDS);events.add("active_end"); }
+            catch(InterruptedException e) { Thread.currentThread().interrupt(); }
+            finally { complete.countDown(); }
+        });
+        try {
+            assertTrue(started.await(3,TimeUnit.SECONDS));
+            TradeReadQueue.execute(() -> { events.add("background");complete.countDown(); });
+            TradeReadQueue.executeUser(() -> { events.add("user");complete.countDown(); });
+            assertEquals(Arrays.asList("active"),events);
+        } finally { release.countDown(); }
+        assertTrue(complete.await(3,TimeUnit.SECONDS));
+        assertEquals(Arrays.asList("active","active_end","user","background"),events);
+    }
     @Test public void obsoleteSessionStopsBeforeNextQuery() throws Exception {
         AtomicBoolean active=new AtomicBoolean(true);
         List<Integer> calls=new ArrayList<>();
